@@ -65,19 +65,35 @@ If a person is not visible you will see "gamertag not visible on this account" o
 their device; fix the follow relationship / privacy setting and it clears on the
 next poll.
 
-## Charts in Domio
+## Usage charts
 
-The usage-charts page is served from the plugin bundle, but the [Domio](../domio-code/)
-iOS app only lists pages it finds in `{Indigo install}/Web Assets/static/pages/`
-(it does not scan inside plugin bundles). Copy the page there once:
+The plugin ships a self-contained charts page (today's play per gamertag, daily
+minutes over 14 days, per-game breakdown, weekly heatmap). It is served by the
+Indigo Web Server straight from the plugin bundle at:
 
-```bash
-cp "/Volumes/Macintosh HD-1/Library/Application Support/Perceptive Automation/Indigo 2025.2/Plugins/Xbox.indigoPlugin/Contents/Resources/static/pages/xbox-charts.html" \
-   "/Volumes/Macintosh HD-1/Library/Application Support/Perceptive Automation/Indigo 2025.2/Web Assets/static/pages/"
+```
+http(s)://<your-indigo-server>:8176/com.simons-plugins.indigo-xbox/static/pages/xbox-charts.html
 ```
 
-It appears in Domio's pages list immediately — no plugin restart needed. Re-copy
-after every plugin update to pick up page improvements.
+(also reachable through your Reflector URL, behind your normal Indigo login).
+The plugin logs this URL on startup.
+
+### Showing the charts in Domio
+
+The [Domio](https://domio-smart-home.app) iOS app lists pages it finds in
+`{Indigo install}/Web Assets/static/pages/` — it does not scan inside plugin
+bundles. Copy the page there once (run **on the Indigo server Mac**):
+
+```bash
+cp "/Library/Application Support/Perceptive Automation/Indigo 2025.2/Plugins/Xbox.indigoPlugin/Contents/Resources/static/pages/xbox-charts.html" \
+   "/Library/Application Support/Perceptive Automation/Indigo 2025.2/Web Assets/static/pages/"
+```
+
+The page then appears in Domio's pages list as **"Xbox Usage"** (game-controller
+icon) immediately — no plugin or server restart needed. Re-copy the file after
+each plugin update to pick up page improvements. The exact source and
+destination paths for your installation are printed in the Event Log each time
+the plugin starts.
 
 ## Development
 
