@@ -3,6 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="indigo-page-name" content="Xbox Usage">
+<meta name="indigo-page-icon" content="gamecontroller.fill">
+<meta name="indigo-page-description" content="Play time charts per gamertag — daily minutes, per-game breakdown, weekly heatmap">
 <title>Xbox Play History</title>
 <style>
   :root {
@@ -141,16 +144,35 @@
 <script>
 "use strict";
 
-// The charts page and its data endpoint are both served by the Indigo Web
-// Server. Resolve the endpoint via a same-origin RELATIVE url (works on the LAN
-// and through the Reflector alike): from
-//   /com.simons-plugins.indigo-xbox/static/charts/index.html
-// "../../../message/com.simons-plugins.indigo-xbox/chart_data/" resolves to
-//   /message/com.simons-plugins.indigo-xbox/chart_data/
-// A ?data=… query param overrides it if ever needed.
-var DEFAULT_ENDPOINT = "../../../message/com.simons-plugins.indigo-xbox/chart_data/";
+// The charts page is served by the Indigo Web Server from one of two
+// locations — the plugin bundle
+// (/com.simons-plugins.indigo-xbox/static/pages/xbox-charts.html) or, once
+// copied there for Domio to list it, the shared pages folder
+// ({base}/static/pages/xbox-charts.html) — both same-origin with the data
+// endpoint. An ABSOLUTE path (rather than the old ../../../ relative one)
+// resolves correctly from either location. A ?data=… query param overrides
+// it if ever needed.
+var DEFAULT_ENDPOINT = "/message/com.simons-plugins.indigo-xbox/chart_data/";
 var ENDPOINT = new URLSearchParams(location.search).get("data") || DEFAULT_ENDPOINT;
 var REFRESH_MS = 60000;
+
+// When Domio's WKWebView hosts this page it injects window.INDIGO_CONFIG =
+// { baseURL, apiKey } (see IndigoWebView.swift) so the page can call the
+// Indigo REST API directly rather than relying on IWS same-origin cookies.
+// Prefix the endpoint with that base URL and send the key as a Bearer
+// token — the same pattern indigo-api.js uses for authenticated fetches.
+// Outside Domio (plain browser on the LAN/Reflector) INDIGO_CONFIG is
+// undefined and the fetch stays a plain same-origin request, as before.
+function fetchUrl() {
+  var cfg = window.INDIGO_CONFIG;
+  return (cfg && cfg.baseURL) ? cfg.baseURL.replace(/\/+$/, "") + ENDPOINT : ENDPOINT;
+}
+function fetchHeaders() {
+  var headers = { "Accept": "application/json" };
+  var cfg = window.INDIGO_CONFIG;
+  if (cfg && cfg.apiKey) headers.Authorization = "Bearer " + cfg.apiKey;
+  return headers;
+}
 
 // One consistent accent per child, keyed by xuid, assigned in the sorted order
 // the endpoint already returns (so it is stable across refreshes).
@@ -481,7 +503,7 @@ function setStatus(text, pulse) {
 
 function load() {
   if (document.hidden) return;
-  fetch(ENDPOINT, { headers: { "Accept": "application/json" }, cache: "no-store" })
+  fetch(fetchUrl(), { headers: fetchHeaders(), cache: "no-store" })
     .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
     .then(function (data) {
       lastData = data;

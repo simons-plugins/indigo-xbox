@@ -10,7 +10,7 @@ import xb_history
 from xb_presence import PersonPresence
 
 PAGE = (Path(__file__).parent.parent / "Xbox.indigoPlugin" / "Contents" /
-        "Resources" / "static" / "charts" / "index.html")
+        "Resources" / "static" / "pages" / "xbox-charts.html")
 
 
 class _Clock:
@@ -137,7 +137,18 @@ def test_charts_page_has_no_external_urls():
     assert "//cdn" not in html and "src=\"//" not in html
 
 
-def test_charts_page_targets_the_relative_endpoint():
+def test_charts_page_targets_the_absolute_endpoint():
+    """The default endpoint must be an absolute same-origin path (not the old
+    ../../../ relative one) so it resolves from both the plugin-bundle URL and
+    the Web Assets/static/pages copy Domio lists."""
     html = PAGE.read_text(encoding="utf-8")
-    assert "message/com.simons-plugins.indigo-xbox/chart_data" in html
-    assert "../../../message/com.simons-plugins.indigo-xbox/chart_data/" in html
+    assert '"/message/com.simons-plugins.indigo-xbox/chart_data/"' in html
+    assert "../../../message" not in html
+
+
+def test_charts_page_has_indigo_page_meta_tags():
+    """Domio discovers pages by reading these meta tags from the first 4KB."""
+    head = PAGE.read_text(encoding="utf-8")[:4096]
+    assert '<meta name="indigo-page-name" content="Xbox Usage">' in head
+    assert '<meta name="indigo-page-icon" content="gamecontroller.fill">' in head
+    assert '<meta name="indigo-page-description" content="Play time charts per gamertag' in head

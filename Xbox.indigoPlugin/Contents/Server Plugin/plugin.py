@@ -29,8 +29,10 @@ HISTORY_FILENAME = "com.simons-plugins.indigo-xbox.history.sqlite"
 
 # The usage-charts page (static file, IWS-served) and its JSON endpoint (hidden
 # action). Paths are relative to the IWS root; the page fetches the endpoint via
-# a same-origin relative URL so it works on the LAN and through the Reflector.
-CHARTS_PAGE_PATH = "/com.simons-plugins.indigo-xbox/static/charts/index.html"
+# an absolute same-origin URL so it works both from the plugin bundle and from
+# the copy in Web Assets/static/pages (see startup() for the Domio copy step).
+CHARTS_PAGE_PATH = "/com.simons-plugins.indigo-xbox/static/pages/xbox-charts.html"
+CHARTS_PAGE_FILENAME = "xbox-charts.html"
 CHART_DATA_DAYS = 30                 # segment window returned to the charts page
 
 DEFAULT_POLL_INTERVAL = 60
@@ -100,9 +102,24 @@ class Plugin(indigo.PluginBase):
         device_count = len(list(indigo.devices.iter("self")))
         self.logger.info("Xbox %s started with %d device(s) configured",
                          self.pluginVersion, device_count)
-        self.logger.info("Xbox usage charts page: %s (served by the Indigo Web "
-                         "Server — open it on your LAN or via your Reflector)",
-                         CHARTS_PAGE_PATH)
+        self._log_charts_page_paths()
+
+    def _log_charts_page_paths(self):
+        """Point at the charts page's plugin-bundle location (served by IWS
+        behind auth) and the copy step needed for Domio to list it — Domio's
+        HTML-pages scan only looks in Web Assets/static/pages, not inside
+        plugin bundles."""
+        try:
+            install = indigo.server.getInstallFolderPath()
+        except Exception:  # pylint: disable=broad-except
+            install = "{Indigo install}"
+        source = os.path.join(install, "Plugins", "Xbox.indigoPlugin", "Contents",
+                              "Resources", "static", "pages", CHARTS_PAGE_FILENAME)
+        dest_dir = os.path.join(install, "Web Assets", "static", "pages")
+        self.logger.info("Xbox usage charts page: %s — to make it appear in Domio, "
+                         "copy it to %s (no restart needed; re-copy after each "
+                         "plugin update)", CHARTS_PAGE_PATH, dest_dir)
+        self.logger.debug("Xbox charts page source: %s", source)
 
     def shutdown(self):
         self._stop_auth.set()

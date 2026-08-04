@@ -6,7 +6,7 @@ All notable changes to the Xbox plugin are documented here.
 
 ### Added
 - Play-history charts page for parents, viewable in a browser and served by the
-  Indigo Web Server at `/com.simons-plugins.indigo-xbox/static/charts/index.html`
+  Indigo Web Server at `/com.simons-plugins.indigo-xbox/static/pages/xbox-charts.html`
   (behind IWS auth; reachable on the LAN or through the Reflector). It is a
   single self-contained page — inline CSS/JS and hand-rolled SVG, zero external
   requests — with a per-child "today" card (gamerpic, live status, minutes,
@@ -14,6 +14,13 @@ All notable changes to the Xbox plugin are documented here.
   per-game breakdown, and a 28-day hour-of-day × day-of-week heatmap. It
   auto-refreshes every 60s (paused while the tab is hidden) and renders in both
   light and dark themes.
+- The page now lives at `static/pages/` (not `static/charts/`) and carries
+  `indigo-page-*` meta tags, so it is Domio-compatible: copy it to
+  `{Indigo install}/Web Assets/static/pages/` and it appears in Domio's HTML
+  pages list immediately (no restart) — see the README's "Charts in Domio"
+  section. It resolves its data endpoint via an absolute same-origin path so
+  it works unchanged from either location, and authenticates with
+  `window.INDIGO_CONFIG` (Bearer apiKey) when Domio injects it.
 - Play-segment history (`xb_history.py`): a stdlib `sqlite3` store recording one
   segment per title (a title switch closes the current segment and opens a new
   one — finer-grained than the session accountant, which is unchanged).

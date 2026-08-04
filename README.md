@@ -65,6 +65,20 @@ If a person is not visible you will see "gamertag not visible on this account" o
 their device; fix the follow relationship / privacy setting and it clears on the
 next poll.
 
+## Charts in Domio
+
+The usage-charts page is served from the plugin bundle, but the [Domio](../domio-code/)
+iOS app only lists pages it finds in `{Indigo install}/Web Assets/static/pages/`
+(it does not scan inside plugin bundles). Copy the page there once:
+
+```bash
+cp "/Volumes/Macintosh HD-1/Library/Application Support/Perceptive Automation/Indigo 2025.2/Plugins/Xbox.indigoPlugin/Contents/Resources/static/pages/xbox-charts.html" \
+   "/Volumes/Macintosh HD-1/Library/Application Support/Perceptive Automation/Indigo 2025.2/Web Assets/static/pages/"
+```
+
+It appears in Domio's pages list immediately — no plugin restart needed. Re-copy
+after every plugin update to pick up page improvements.
+
 ## Development
 
 - Python 3.10+, **stdlib only** (no `requirements.txt`). Only `plugin.py`
