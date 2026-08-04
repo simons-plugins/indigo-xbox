@@ -304,6 +304,7 @@ class Plugin(indigo.PluginBase):
 
     # -- Device lifecycle ----------------------------------------------------
     def deviceStartComm(self, dev):  # noqa: N803
+        dev.stateListOrDisplayStateIdChanged()  # pick up state keys added in newer Devices.xml revisions
         xuid = (dev.pluginProps or {}).get("xuid", "")
         with self._dev_lock:
             self._tracked[dev.id] = xuid
@@ -371,14 +372,13 @@ class Plugin(indigo.PluginBase):
         in_game = presence.in_game
         online = presence.online
         title_name = (presence.primary_title_text or presence.presence_text) if in_game else ""
-        display = title_name if in_game else presence.state
 
         # Feed the session model this poll's in-game boolean; the returned stats
         # (start / live minutes / last / today) are written change-only below.
         stats = self._sessions.update(presence.xuid, in_game)
-        # Box art only for a real, non-dashboard title (cache-guarded → one
-        # titlehub call per titleId for the plugin's lifetime; never fails poll).
-        title_image = self._title_image(caller_xuid, presence.primary_title_id) if in_game else ""
+        # Box art only for a real, non-dashboard title — resolved inline into the
+        # state tuple below (cache-guarded → one titlehub call per titleId for
+        # the plugin's lifetime; a failure yields "" and never breaks the poll).
 
         batch = []
         # Transition to offline: stamp lastSeen once, on the online→offline edge.
@@ -400,7 +400,9 @@ class Plugin(indigo.PluginBase):
                            ("gamerPicUrl", presence.gamer_pic_url),
                            ("displayName", presence.display_name),
                            # Title box art
-                           ("titleImageUrl", title_image),
+                           ("titleImageUrl",
+                            self._title_image(caller_xuid, presence.primary_title_id)
+                            if in_game else ""),
                            # Session stats
                            ("sessionStartedAt", stats.session_started_at),
                            ("sessionMinutes", stats.session_minutes),
@@ -416,6 +418,7 @@ class Plugin(indigo.PluginBase):
                            or current.get("titleName") != title_name
                            or current.get("presenceState") != presence.state)
         if display_changed:
+            display = title_name if in_game else presence.state
             batch.append({"key": "onOffState", "value": in_game, "uiValue": display})
 
         if batch:

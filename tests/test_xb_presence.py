@@ -367,8 +367,9 @@ def test_apply_profile_overlays_without_clobbering():
 # -- title box art (parse + fetch) --------------------------------------------
 
 def test_parse_title_image_prefers_display_image():
-    url = xb_presence.parse_title_image(load_fixture_local("titlehub_titleinfo.json"))
-    assert url.startswith("http")
+    payload = load_fixture("titlehub_titleinfo.json")
+    url = xb_presence.parse_title_image(payload)
+    assert url == payload["titles"][0]["displayImage"]     # displayImage wins
 
 
 def test_parse_title_image_falls_back_to_box_art_by_type():

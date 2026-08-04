@@ -1,11 +1,13 @@
 """Tests for the device layer in plugin.py: bridge tracking, presence→state
 sync (change-only writes, transitions, unknown xuid), and the ConfigUI."""
 import logging
+from datetime import datetime
 
 import indigo   # the conftest fake
 import plugin
 import xb_constants as xc
-from support import FakeAPI
+import xb_sessions
+from support import FakeAPI, oauth_error
 from xb_presence import PersonPresence
 
 
@@ -328,6 +330,132 @@ def test_log_tracked_people_logs_own_presence_first_marked_me(caplog):
     assert "(me)" in me_line
     assert "Halo Infinite" in me_line
     assert lines.index(me_line) < lines.index(abe_line)   # own presence logged first
+
+
+# -- self-profile fetch cadence -----------------------------------------------
+
+class _Clock:
+    def __init__(self, now):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+def test_self_profile_fetch_only_every_nth_poll():
+    p = _plugin()
+    p._auth = _FakeAuth(own=("OWN", "SimonG"))
+    api = FakeAPI()
+    profile_body = {"profileUsers": [{"id": "OWN", "settings": [
+        {"id": "Gamerscore", "value": "100"}]}]}
+    api.queue_get(profile_body)          # only two live fetches should ever occur
+    api.queue_get(profile_body)
+
+    # first call fetches
+    info = p._maybe_fetch_self_profile(api, p._auth, "OWN")
+    assert info.gamer_score == 100
+    assert len(api.get_calls) == 1
+
+    # the next N calls are served from cache (no extra gets)
+    for _ in range(plugin.SELF_PROFILE_REFRESH_EVERY):
+        p._maybe_fetch_self_profile(api, p._auth, "OWN")
+    assert len(api.get_calls) == 1
+
+    # the following call refreshes again
+    p._maybe_fetch_self_profile(api, p._auth, "OWN")
+    assert len(api.get_calls) == 2
+
+
+def test_self_profile_fetch_failure_keeps_cache_and_never_raises():
+    p = _plugin()
+    p._auth = _FakeAuth(own=("OWN", "SimonG"))
+    api = FakeAPI().queue_get(oauth_error("boom", status=500))
+    # Must not raise, returns the (empty) cache.
+    assert p._maybe_fetch_self_profile(api, p._auth, "OWN") is None
+
+
+# -- title box art cache ------------------------------------------------------
+
+def _self_plugin_with_api(api):
+    p = _plugin()
+    p._auth = _FakeAuth(own=("OWN", "SimonG"))
+    p._api = api
+    return p
+
+
+def test_title_image_fetched_once_per_title_and_cached():
+    api = FakeAPI().queue_get({"titles": [{"titleId": "111",
+                                           "displayImage": "http://box/111.png"}]})
+    p = _self_plugin_with_api(api)
+    dev = _device(30, "X1")
+    _start(p, dev)
+    presence = _presence("X1", state="Online", title="Halo", title_id="111", is_game=True)
+    p._sync_all([presence])
+    assert dev.states["titleImageUrl"] == "http://box/111.png"
+    assert len(api.get_calls) == 1
+    # second poll, same titleId → served from cache, no new titlehub call
+    p._sync_all([presence])
+    assert len(api.get_calls) == 1
+
+
+def test_title_image_failure_leaves_state_empty_and_caches():
+    api = FakeAPI().queue_get(oauth_error("nope", status=404))
+    p = _self_plugin_with_api(api)
+    dev = _device(31, "X1")
+    _start(p, dev)
+    presence = _presence("X1", state="Online", title="Halo", title_id="222", is_game=True)
+    p._sync_all([presence])
+    assert dev.states["titleImageUrl"] == ""      # failure → empty, poll not broken
+    assert len(api.get_calls) == 1
+    p._sync_all([presence])
+    assert len(api.get_calls) == 1                # failure cached; not retried
+
+
+def test_title_image_skipped_for_dashboard_title():
+    api = FakeAPI()
+    p = _self_plugin_with_api(api)
+    dev = _device(32, "X1")
+    _start(p, dev)
+    # dashboard-only online is not in_game, so no box art fetch at all
+    p._sync_all([_presence("X1", state="Online", title_id=xc.DASHBOARD_TITLE_ID,
+                           is_game=False)])
+    assert dev.states["titleImageUrl"] == ""
+    assert len(api.get_calls) == 0
+
+
+# -- session stats written into device states (change-only) -------------------
+
+def test_session_states_written_and_change_only():
+    p = _plugin()
+    clock = _Clock(datetime(2026, 8, 4, 10, 0, 0))
+    p._sessions = xb_sessions.SessionAccountant(clock=clock)
+    dev = _device(40, "X1")
+    _start(p, dev)
+
+    presence = _presence("X1", state="Online", title="Halo", title_id="1", is_game=True)
+    p._sync_all([presence])
+    assert dev.states["sessionStartedAt"] == datetime(2026, 8, 4, 10, 0, 0).isoformat()
+    assert dev.states["sessionMinutes"] == 0
+    assert dev.states["todayMinutes"] == 0
+
+    # same minute, same presence → no new state batch (change-only)
+    batches = len(dev.batches)
+    p._sync_all([presence])
+    assert len(dev.batches) == batches
+
+    # 15 live minutes later → sessionMinutes updates
+    clock.now = datetime(2026, 8, 4, 10, 15, 0)
+    p._sync_all([presence])
+    assert dev.states["sessionMinutes"] == 15
+    assert dev.states["todayMinutes"] == 15
+
+    # stop playing → session closes, last/today recorded
+    clock.now = datetime(2026, 8, 4, 10, 20, 0)
+    p._sync_all([_presence("X1", state="Online", is_game=False)])
+    assert dev.states["sessionStartedAt"] == ""
+    assert dev.states["sessionMinutes"] == 0
+    assert dev.states["lastSessionMinutes"] == 20
+    assert dev.states["todayMinutes"] == 20
 
 
 # -- poll interval coercion ---------------------------------------------------
