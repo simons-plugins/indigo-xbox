@@ -30,6 +30,10 @@ class _FakeDevice:
         self.error_state = None
         self.error_calls = []
         self.batches = []          # each updateStatesOnServer call, as a list of dicts
+        self.state_list_refreshes = 0
+
+    def stateListOrDisplayStateIdChanged(self):
+        self.state_list_refreshes += 1
 
     def updateStatesOnServer(self, items):
         batch = []

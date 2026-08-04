@@ -2,6 +2,28 @@
 
 All notable changes to the Xbox plugin are documented here.
 
+## 2026.0.4 — State-list refresh on device start
+
+### Fixed
+- Devices created under an older Devices.xml revision ignored newly added
+  state keys ("state key X not defined" in the Event Log). `deviceStartComm`
+  now calls `stateListOrDisplayStateIdChanged()` so existing devices pick up
+  new states after a plugin upgrade without an open-and-save.
+
+## 2026.0.3 — Rich states
+
+### Added
+- Session stats computed per device: `sessionStartedAt`, `sessionMinutes`
+  (live), `lastSessionMinutes`, `todayMinutes` — with midnight splitting and
+  restart persistence via an atomic sidecar file (`xb_sessions.py`).
+- Rich presence: `richPresenceText`, `isBroadcasting`, `inMultiplayer`
+  (peoplehub decorations expanded — still a single call).
+- Profile extras: `gamerScore`, `accountTier`, `gamerPicUrl`, `displayName`
+  (peoplehub detail decoration; profile service for the self device, cached
+  and refreshed every 10th poll).
+- Title box art: `titleImageUrl` via titlehub, cached per titleId; failures
+  degrade to an empty state without breaking presence sync.
+
 ## 2026.0.2 — Self-tracking
 
 Peoplehub's social graph never includes the signed-in account itself, so
