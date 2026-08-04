@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Xbox Play History</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --card-border: #e6e8ec;
+    --text: #1b1d22;
+    --muted: #6b7280;
+    --grid: #e7e9ee;
+    --track: #eef0f4;
+    --shadow: 0 1px 2px rgba(16,18,22,.06), 0 4px 16px rgba(16,18,22,.05);
+    --radius: 14px;
+    --accent: #107c10;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115;
+      --card: #171a21;
+      --card-border: #262b35;
+      --text: #e8eaed;
+      --muted: #9aa0aa;
+      --grid: #262b35;
+      --track: #1f232c;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.35);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    padding: 24px 20px 64px;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  header.page {
+    display: flex; align-items: baseline; justify-content: space-between;
+    flex-wrap: wrap; gap: 8px 16px; margin-bottom: 20px;
+  }
+  header.page h1 { font-size: 22px; font-weight: 650; margin: 0; letter-spacing: -.01em; }
+  .status { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 7px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); opacity: .5; }
+  .dot.pulse { animation: pulse 1s ease; }
+  @keyframes pulse { 0% { opacity: 1; transform: scale(1.6);} 100% { opacity: .5; transform: scale(1);} }
+
+  section { margin: 26px 0 0; }
+  h2 { font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+       color: var(--muted); margin: 0 0 12px; }
+
+  .card {
+    background: var(--card); border: 1px solid var(--card-border);
+    border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 20px;
+  }
+  .chart-scroll { overflow-x: auto; }
+  svg { display: block; width: 100%; height: auto; }
+  svg text { fill: var(--muted); font-size: 11px; }
+  .grid-line { stroke: var(--grid); stroke-width: 1; }
+
+  /* Today cards */
+  .today-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+  .kid {
+    background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 16px; display: flex; flex-direction: column; gap: 12px;
+    border-top: 3px solid var(--accent);
+  }
+  .kid-head { display: flex; align-items: center; gap: 12px; }
+  .pic { width: 44px; height: 44px; border-radius: 50%; flex: 0 0 auto; position: relative;
+         display: grid; place-items: center; color: #fff; font-weight: 700; overflow: hidden; }
+  .pic img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .kid-name { font-weight: 620; font-size: 15px; }
+  .kid-sub { font-size: 12.5px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .pip { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: 0 0 auto; }
+  .pip.online { background: #34c759; }
+  .pip.playing { background: var(--accent); }
+  .kid-today { display: flex; align-items: baseline; gap: 6px; }
+  .kid-today .n { font-size: 26px; font-weight: 680; letter-spacing: -.02em; }
+  .kid-today .u { font-size: 12.5px; color: var(--muted); }
+  .boxart { margin-top: auto; border-radius: 10px; overflow: hidden; border: 1px solid var(--card-border);
+            aspect-ratio: 16 / 9; background: var(--track); }
+  .boxart img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+  /* Filter chips */
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .chip {
+    font: inherit; font-size: 13px; cursor: pointer; border: 1px solid var(--card-border);
+    background: var(--card); color: var(--text); padding: 5px 12px; border-radius: 999px;
+    display: inline-flex; align-items: center; gap: 7px; line-height: 1.4;
+  }
+  .chip .sw { width: 9px; height: 9px; border-radius: 50%; }
+  .chip[aria-pressed="true"] { border-color: transparent; color: #fff; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; font-size: 12.5px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend .sw { width: 10px; height: 10px; border-radius: 3px; }
+
+  .empty { color: var(--muted); font-size: 13.5px; padding: 26px 4px; text-align: center; }
+  .hbar-name { fill: var(--text); font-size: 12px; }
+  .hbar-val { fill: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="page">
+    <h1>Xbox Play History</h1>
+    <div class="status"><span class="dot" id="dot"></span><span id="status">Loading…</span></div>
+  </header>
+
+  <section id="today-section">
+    <h2>Today</h2>
+    <div class="today-grid" id="today"></div>
+  </section>
+
+  <section>
+    <h2>Daily minutes — last 14 days</h2>
+    <div class="card">
+      <div class="chart-scroll"><div id="daily"></div></div>
+      <div class="legend" id="daily-legend"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Per-game — last 30 days</h2>
+    <div class="filters" id="filter-game"></div>
+    <div class="card"><div class="chart-scroll"><div id="games"></div></div></div>
+  </section>
+
+  <section>
+    <h2>When they play — last 28 days</h2>
+    <div class="filters" id="filter-heat"></div>
+    <div class="card"><div class="chart-scroll"><div id="heat"></div></div></div>
+  </section>
+</div>
+
+<script>
+"use strict";
+
+// The charts page and its data endpoint are both served by the Indigo Web
+// Server. Resolve the endpoint via a same-origin RELATIVE url (works on the LAN
+// and through the Reflector alike): from
+//   /com.simons-plugins.indigo-xbox/static/charts/index.html
+// "../../../message/com.simons-plugins.indigo-xbox/chart_data/" resolves to
+//   /message/com.simons-plugins.indigo-xbox/chart_data/
+// A ?data=… query param overrides it if ever needed.
+var DEFAULT_ENDPOINT = "../../../message/com.simons-plugins.indigo-xbox/chart_data/";
+var ENDPOINT = new URLSearchParams(location.search).get("data") || DEFAULT_ENDPOINT;
+var REFRESH_MS = 60000;
+
+// One consistent accent per child, keyed by xuid, assigned in the sorted order
+// the endpoint already returns (so it is stable across refreshes).
+var PALETTE = ["#107c10", "#0e76c4", "#c43a0e", "#7c5cff",
+               "#d98a00", "#d81b8c", "#0a9aa6", "#5a8f00"];
+var colorMap = {};
+function colorFor(xuid) { return colorMap[xuid] || "var(--accent)"; }
+
+var gameFilter = "all";   // xuid or "all"
+var heatFilter = "all";
+var lastData = null;
+
+function fmtMinutes(m) {
+  m = Math.round(m);
+  if (m < 60) return m + "m";
+  var h = Math.floor(m / 60), r = m % 60;
+  return r ? h + "h " + r + "m" : h + "h";
+}
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+  });
+}
+function localDate(d) {
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" +
+         String(d.getDate()).padStart(2, "0");
+}
+function lastDays(n) {
+  var out = [], now = new Date();
+  now.setHours(0, 0, 0, 0);
+  for (var i = n - 1; i >= 0; i--) {
+    var d = new Date(now); d.setDate(now.getDate() - i);
+    out.push(d);
+  }
+  return out;
+}
+function hexToRgb(hex) {
+  var m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex || "");
+  return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : [16, 124, 16];
+}
+// svg element builder (avoids literal external namespace urls in this file)
+var SVGNS = ["http:", "//www.w3.org/2000/svg"].join("");
+function svg(tag, attrs, text) {
+  var el = document.createElementNS(SVGNS, tag);
+  for (var k in attrs) if (attrs[k] != null) el.setAttribute(k, attrs[k]);
+  if (text != null) el.textContent = text;
+  return el;
+}
+function svgRoot(w, h) {
+  var s = svg("svg", { viewBox: "0 0 " + w + " " + h, "aria-hidden": "true" });
+  s.style.minWidth = Math.min(w, 640) + "px";
+  return s;
+}
+function niceMax(v) {
+  if (v <= 0) return 60;
+  var steps = [15, 30, 60, 90, 120, 180, 240, 300, 360, 480, 600, 720];
+  for (var i = 0; i < steps.length; i++) if (v <= steps[i]) return steps[i];
+  return Math.ceil(v / 120) * 120;
+}
+function emptyNote(host, msg) {
+  var d = document.createElement("div");
+  d.className = "empty";
+  d.textContent = msg || "No sessions recorded yet";
+  host.innerHTML = "";
+  host.appendChild(d);
+}
+
+// ---- Today cards ------------------------------------------------------------
+function renderToday(people) {
+  var host = document.getElementById("today");
+  host.innerHTML = "";
+  if (!people.length) { emptyNote(host, "No tracked gamertags yet"); return; }
+  people.forEach(function (p) {
+    var accent = colorFor(p.xuid);
+    var card = document.createElement("div");
+    card.className = "kid";
+    card.style.setProperty("--accent", accent);
+
+    var head = document.createElement("div");
+    head.className = "kid-head";
+    var pic = document.createElement("div");
+    pic.className = "pic";
+    pic.style.background = accent;
+    pic.textContent = (p.gamertag || "?").slice(0, 1).toUpperCase();
+    if (p.gamerPicUrl) {
+      var img = document.createElement("img");
+      img.alt = ""; img.referrerPolicy = "no-referrer";
+      img.onerror = function () { img.remove(); };
+      img.src = p.gamerPicUrl;
+      pic.appendChild(img);
+    }
+    var names = document.createElement("div");
+    var live = p.live || {};
+    var statusText = live.inGame ? ("Playing " + (live.titleName || "a game"))
+                    : live.online ? "Online" : "Offline";
+    names.innerHTML = '<div class="kid-name">' + esc(p.gamertag) + '</div>' +
+      '<div class="kid-sub"><span class="pip ' +
+      (live.inGame ? "playing" : live.online ? "online" : "") + '"></span>' +
+      esc(statusText) + '</div>';
+    head.appendChild(pic); head.appendChild(names);
+
+    var today = document.createElement("div");
+    today.className = "kid-today";
+    today.innerHTML = '<span class="n">' + fmtMinutes(live.todayMinutes || 0) +
+      '</span><span class="u">played today</span>';
+
+    card.appendChild(head);
+    card.appendChild(today);
+
+    if (live.inGame && live.titleImageUrl) {
+      var box = document.createElement("div");
+      box.className = "boxart";
+      var bimg = document.createElement("img");
+      bimg.alt = ""; bimg.referrerPolicy = "no-referrer";
+      bimg.onerror = function () { box.remove(); };
+      bimg.src = live.titleImageUrl;
+      box.appendChild(bimg);
+      card.appendChild(box);
+    }
+    host.appendChild(card);
+  });
+}
+
+// ---- Daily grouped bars (14 days) -------------------------------------------
+function renderDaily(people, segments) {
+  var host = document.getElementById("daily");
+  var legend = document.getElementById("daily-legend");
+  host.innerHTML = ""; legend.innerHTML = "";
+  var days = lastDays(14);
+  var dayKeys = days.map(localDate);
+  // minutes[xuid][dateKey]
+  var totals = {}, grand = 0;
+  people.forEach(function (p) { totals[p.xuid] = {}; });
+  segments.forEach(function (s) {
+    if (dayKeys.indexOf(s.date) < 0) return;
+    if (!totals[s.xuid]) totals[s.xuid] = {};
+    totals[s.xuid][s.date] = (totals[s.xuid][s.date] || 0) + s.minutes;
+    grand += s.minutes;
+  });
+  if (grand <= 0) { emptyNote(host); return; }
+
+  var W = 820, H = 300, mL = 40, mR = 12, mT = 12, mB = 46;
+  var plotW = W - mL - mR, plotH = H - mT - mB;
+  var maxV = niceMax(Math.max.apply(null, days.map(function (d) {
+    var k = localDate(d), sum = 0;
+    people.forEach(function (p) { sum = Math.max(sum, (totals[p.xuid] || {})[k] || 0); });
+    return sum;
+  })));
+  var s = svgRoot(W, H);
+  // y grid + labels
+  var ticks = 4;
+  for (var t = 0; t <= ticks; t++) {
+    var val = maxV * t / ticks;
+    var y = mT + plotH - (val / maxV) * plotH;
+    s.appendChild(svg("line", { class: "grid-line", x1: mL, y1: y, x2: W - mR, y2: y }));
+    s.appendChild(svg("text", { x: mL - 6, y: y + 3, "text-anchor": "end" }, Math.round(val)));
+  }
+  var groupW = plotW / days.length;
+  var pplWithData = people.filter(function (p) {
+    return dayKeys.some(function (k) { return (totals[p.xuid] || {})[k]; });
+  });
+  var nb = Math.max(pplWithData.length, 1);
+  var pad = groupW * 0.18;
+  var barW = (groupW - pad) / nb;
+  days.forEach(function (d, di) {
+    var gx = mL + di * groupW + pad / 2;
+    pplWithData.forEach(function (p, bi) {
+      var v = (totals[p.xuid] || {})[localDate(d)] || 0;
+      var h = (v / maxV) * plotH;
+      if (h > 0) {
+        s.appendChild(svg("rect", {
+          x: gx + bi * barW, y: mT + plotH - h, width: Math.max(barW - 1.5, 1),
+          height: h, rx: 2, fill: colorFor(p.xuid)
+        }));
+      }
+    });
+    var label = d.toLocaleDateString(undefined, { weekday: "short" }).slice(0, 2) + " " + d.getDate();
+    s.appendChild(svg("text", {
+      x: mL + di * groupW + groupW / 2, y: H - mB + 16, "text-anchor": "middle"
+    }, label));
+  });
+  host.appendChild(s);
+
+  pplWithData.forEach(function (p) {
+    var sp = document.createElement("span");
+    sp.innerHTML = '<span class="sw" style="background:' + colorFor(p.xuid) + '"></span>' + esc(p.gamertag);
+    legend.appendChild(sp);
+  });
+}
+
+// ---- Per-game horizontal bars (30 days, filtered) ---------------------------
+function renderGames(people, segments) {
+  var host = document.getElementById("games");
+  host.innerHTML = "";
+  var rows = segments.filter(function (s) { return heatOrGamePass(s, gameFilter); });
+  var byTitle = {};
+  rows.forEach(function (s) {
+    var name = s.title_name || "Unknown game";
+    byTitle[name] = (byTitle[name] || 0) + s.minutes;
+  });
+  var arr = Object.keys(byTitle).map(function (k) { return { name: k, min: byTitle[k] }; })
+    .sort(function (a, b) { return b.min - a.min; }).slice(0, 10);
+  if (!arr.length) { emptyNote(host); return; }
+
+  var accent = gameFilter === "all" ? "var(--accent)" : colorFor(gameFilter);
+  var rowH = 30, mT = 6, mB = 6, mL = 150, mR = 54;
+  var W = 820, H = mT + mB + arr.length * rowH;
+  var plotW = W - mL - mR;
+  var maxV = Math.max.apply(null, arr.map(function (a) { return a.min; }));
+  var s = svgRoot(W, H);
+  arr.forEach(function (a, i) {
+    var y = mT + i * rowH;
+    var bw = Math.max((a.min / maxV) * plotW, 2);
+    s.appendChild(svg("text", { x: mL - 10, y: y + rowH / 2 + 4, "text-anchor": "end", class: "hbar-name" },
+      a.name.length > 22 ? a.name.slice(0, 21) + "…" : a.name));
+    s.appendChild(svg("rect", { x: mL, y: y + 5, width: plotW, height: rowH - 12, rx: 4, fill: "var(--track)" }));
+    s.appendChild(svg("rect", { x: mL, y: y + 5, width: bw, height: rowH - 12, rx: 4, fill: accent }));
+    s.appendChild(svg("text", { x: mL + bw + 8, y: y + rowH / 2 + 4, class: "hbar-val" }, fmtMinutes(a.min)));
+  });
+  host.appendChild(s);
+}
+
+// ---- Heatmap (28 days, hour x weekday, filtered) ----------------------------
+function renderHeat(people, segments) {
+  var host = document.getElementById("heat");
+  host.innerHTML = "";
+  var cutoff = new Date(); cutoff.setHours(0, 0, 0, 0); cutoff.setDate(cutoff.getDate() - 27);
+  var grid = [], maxV = 0;
+  for (var r = 0; r < 7; r++) grid.push(new Array(24).fill(0));
+  segments.forEach(function (sg) {
+    if (!heatOrGamePass(sg, heatFilter)) return;
+    var start = new Date(sg.started_at), end = new Date(sg.ended_at);
+    if (isNaN(start) || isNaN(end) || end <= start) return;
+    if (start < cutoff) return;
+    var cur = new Date(start);
+    while (cur < end) {
+      var dow = (cur.getDay() + 6) % 7;               // Mon=0 … Sun=6
+      var hour = cur.getHours();
+      var nextH = new Date(cur); nextH.setMinutes(0, 0, 0); nextH.setHours(cur.getHours() + 1);
+      var segEnd = nextH < end ? nextH : end;
+      grid[dow][hour] += (segEnd - cur) / 60000;
+      cur = segEnd;
+    }
+  });
+  grid.forEach(function (row) { row.forEach(function (v) { if (v > maxV) maxV = v; }); });
+  if (maxV <= 0) { emptyNote(host); return; }
+
+  var accent = heatFilter === "all" ? "var(--accent)" : colorFor(heatFilter);
+  var rgb = hexToRgb(accent === "var(--accent)" ? "#107c10" : accent);
+  var days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  var mL = 38, mT = 18, cell = 30, gap = 3, mB = 4, mR = 6;
+  var W = mL + 24 * cell + mR, H = mT + 7 * cell + mB;
+  var s = svgRoot(W, H);
+  for (var h = 0; h < 24; h += 3) {
+    s.appendChild(svg("text", { x: mL + h * cell + cell / 2, y: 12, "text-anchor": "middle" },
+      String(h).padStart(2, "0")));
+  }
+  for (var d = 0; d < 7; d++) {
+    s.appendChild(svg("text", { x: mL - 8, y: mT + d * cell + cell / 2 + 4, "text-anchor": "end" }, days[d]));
+    for (var hh = 0; hh < 24; hh++) {
+      var v = grid[d][hh], t = v / maxV;
+      var fill = t <= 0 ? "var(--track)"
+        : "rgba(" + rgb[0] + "," + rgb[1] + "," + rgb[2] + "," + (0.12 + 0.88 * t).toFixed(3) + ")";
+      var rect = svg("rect", {
+        x: mL + hh * cell + gap / 2, y: mT + d * cell + gap / 2,
+        width: cell - gap, height: cell - gap, rx: 4, fill: fill
+      });
+      if (v > 0) rect.appendChild(svg("title", {}, days[d] + " " +
+        String(hh).padStart(2, "0") + ":00 — " + fmtMinutes(v)));
+      s.appendChild(rect);
+    }
+  }
+  host.appendChild(s);
+}
+
+function heatOrGamePass(segment, filter) { return filter === "all" || segment.xuid === filter; }
+
+// ---- Filter chips -----------------------------------------------------------
+function renderFilters(id, people, current, onPick) {
+  var host = document.getElementById(id);
+  host.innerHTML = "";
+  var opts = [{ xuid: "all", gamertag: "All" }].concat(people);
+  opts.forEach(function (o) {
+    var b = document.createElement("button");
+    b.className = "chip";
+    b.type = "button";
+    var accent = o.xuid === "all" ? "var(--accent)" : colorFor(o.xuid);
+    b.setAttribute("aria-pressed", String(o.xuid === current));
+    if (o.xuid === current) b.style.background = accent;
+    b.innerHTML = (o.xuid === "all" ? "" :
+      '<span class="sw" style="background:' + (o.xuid === current ? "#fff" : accent) + '"></span>') +
+      esc(o.gamertag);
+    b.onclick = function () { onPick(o.xuid); };
+    host.appendChild(b);
+  });
+}
+
+// ---- Orchestration ----------------------------------------------------------
+function assignColors(people, segments) {
+  var xuids = {};
+  people.forEach(function (p) { xuids[p.xuid] = true; });
+  segments.forEach(function (s) { xuids[s.xuid] = true; });
+  Object.keys(xuids).sort().forEach(function (x, i) {
+    if (!colorMap[x]) colorMap[x] = PALETTE[i % PALETTE.length];
+  });
+}
+
+function renderAll(data) {
+  var people = data.people || [], segments = data.segments || [];
+  assignColors(people, segments);
+  if (gameFilter !== "all" && !people.some(function (p) { return p.xuid === gameFilter; })) gameFilter = "all";
+  if (heatFilter !== "all" && !people.some(function (p) { return p.xuid === heatFilter; })) heatFilter = "all";
+  renderToday(people);
+  renderDaily(people, segments);
+  renderFilters("filter-game", people, gameFilter, function (x) { gameFilter = x; renderAll(lastData); });
+  renderGames(people, segments);
+  renderFilters("filter-heat", people, heatFilter, function (x) { heatFilter = x; renderAll(lastData); });
+  renderHeat(people, segments);
+}
+
+function setStatus(text, pulse) {
+  document.getElementById("status").textContent = text;
+  if (pulse) {
+    var dot = document.getElementById("dot");
+    dot.classList.remove("pulse"); void dot.offsetWidth; dot.classList.add("pulse");
+  }
+}
+
+function load() {
+  if (document.hidden) return;
+  fetch(ENDPOINT, { headers: { "Accept": "application/json" }, cache: "no-store" })
+    .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+    .then(function (data) {
+      lastData = data;
+      renderAll(data);
+      var when = data.generated_at ? new Date(data.generated_at) : new Date();
+      setStatus("Updated " + when.toLocaleTimeString(), true);
+    })
+    .catch(function (err) {
+      setStatus("Could not load data (" + err.message + ")", false);
+      if (!lastData) {
+        ["today", "daily", "games", "heat"].forEach(function (id) {
+          emptyNote(document.getElementById(id), "No data — is the plugin running and authorized?");
+        });
+      }
+    });
+}
+
+document.addEventListener("visibilitychange", function () { if (!document.hidden) load(); });
+setInterval(load, REFRESH_MS);
+load();
+</script>
+</body>
+</html>

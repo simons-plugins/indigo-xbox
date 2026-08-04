@@ -6,9 +6,10 @@ Indigo's SQL Logger accumulates play-session history. Auth is MSA Device Flow
 Indigo-touching code lives here; the ``xb_*`` modules are pure stdlib and never
 import ``indigo``.
 """
+import json
 import os
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 try:
     import indigo
@@ -16,6 +17,7 @@ except ImportError:  # pragma: no cover - only importable inside the Indigo serv
     indigo = None
 
 import xb_constants as xc
+import xb_history
 import xb_presence
 import xb_sessions
 from xb_api import XboxAPI, XboxError, redact
@@ -23,6 +25,13 @@ from xb_auth import XboxAuth
 
 TOKEN_FILENAME = "com.simons-plugins.indigo-xbox.tokens.json"
 SESSIONS_FILENAME = "com.simons-plugins.indigo-xbox.sessions.json"
+HISTORY_FILENAME = "com.simons-plugins.indigo-xbox.history.sqlite"
+
+# The usage-charts page (static file, IWS-served) and its JSON endpoint (hidden
+# action). Paths are relative to the IWS root; the page fetches the endpoint via
+# a same-origin relative URL so it works on the LAN and through the Reflector.
+CHARTS_PAGE_PATH = "/com.simons-plugins.indigo-xbox/static/charts/index.html"
+CHART_DATA_DAYS = 30                 # segment window returned to the charts page
 
 DEFAULT_POLL_INTERVAL = 60
 MIN_POLL_INTERVAL = 15
@@ -69,6 +78,12 @@ class Plugin(indigo.PluginBase):
         self._sessions = xb_sessions.SessionAccountant(clock=datetime.now)
         self._session_store = None
         self._last_session_snapshot = {}
+        # Play-segment history (finer-grained than sessions: one segment per
+        # title). Open segments live in the tracker's memory; the SQLite store
+        # is created in startup() once the prefs path is available (None until
+        # then / in unit tests → segments tracked but not persisted).
+        self._history = None
+        self._segments = xb_history.SegmentTracker(store=None, clock=datetime.now)
         # Self-device profile extras: cached ProfileInfo + a poll countdown.
         self._self_profile = None
         self._self_profile_countdown = 0
@@ -81,14 +96,33 @@ class Plugin(indigo.PluginBase):
         self.logger.info("Xbox plugin starting")
         self._rebuild_client()
         self._load_sessions()
+        self._load_history()
         device_count = len(list(indigo.devices.iter("self")))
         self.logger.info("Xbox %s started with %d device(s) configured",
                          self.pluginVersion, device_count)
+        self.logger.info("Xbox usage charts page: %s (served by the Indigo Web "
+                         "Server — open it on your LAN or via your Reflector)",
+                         CHARTS_PAGE_PATH)
 
     def shutdown(self):
         self._stop_auth.set()
         self._persist_sessions()          # flush any in-flight session state
+        self._segments.flush()            # close open play segments (best-effort)
         self.logger.info("Xbox plugin stopped")
+
+    def _load_history(self):
+        """Open the play-segment store, wire it into the tracker, and prune old
+        rows once at startup (best-effort — history is a nice-to-have layer and
+        must never block the plugin from coming up)."""
+        try:
+            self._history = xb_history.HistoryStore(self._history_path(), logger=self.logger)
+            self._segments = xb_history.SegmentTracker(store=self._history, clock=datetime.now)
+            pruned = self._history.prune()
+            if pruned:
+                self.logger.debug("Xbox history: pruned %d old segment(s)", pruned)
+        except Exception as exc:  # pylint: disable=broad-except
+            self.logger.warning("Xbox history unavailable (charts will show no "
+                                "past sessions): %s", exc)
 
     def _load_sessions(self):
         """Restore session records from the sidecar so a plugin restart resumes
@@ -189,6 +223,9 @@ class Plugin(indigo.PluginBase):
 
     def _sessions_path(self):
         return os.path.join(self._prefs_dir(), SESSIONS_FILENAME)
+
+    def _history_path(self):
+        return os.path.join(self._prefs_dir(), HISTORY_FILENAME)
 
     def _title_image(self, caller_xuid, title_id):
         """Resolve a title's box-art URL, cached per titleId for the plugin's
@@ -376,6 +413,10 @@ class Plugin(indigo.PluginBase):
         # Feed the session model this poll's in-game boolean; the returned stats
         # (start / live minutes / last / today) are written change-only below.
         stats = self._sessions.update(presence.xuid, in_game)
+        # Feed the finer-grained segment tracker (one segment per title); it
+        # persists a row on segment close only. A title switch closes+reopens.
+        self._segments.update(presence.xuid, in_game, presence.primary_title_id,
+                              presence.primary_title_text or "", presence.gamertag)
         # Box art only for a real, non-dashboard title — resolved inline into the
         # state tuple below (cache-guarded → one titlehub call per titleId for
         # the plugin's lifetime; a failure yields "" and never breaks the poll).
@@ -504,6 +545,71 @@ class Plugin(indigo.PluginBase):
             self.logger.info("  %s (xuid=%s) %s — %s%s",
                              person.gamertag, person.xuid, person.state, title,
                              _score_suffix(person))
+
+    # -- Usage-charts HTTP endpoint (IWS hidden action) ----------------------
+    def http_chart_data(self, action, dev=None, caller_waiting_for_result=None):  # noqa: N803, ARG002
+        """Serve the charts page's data: live device states for each tracked
+        person plus the last :data:`CHART_DATA_DAYS` days of play segments.
+
+        Returns only presence/usage data (no tokens or other secrets)."""
+        try:
+            body = self._build_chart_data()
+        except Exception as exc:  # pylint: disable=broad-except
+            self.logger.exception(exc)
+            return self._chart_reply(500, {"error": "internal_error", "message": str(exc)})
+        return self._chart_reply(200, body)
+
+    def _build_chart_data(self):
+        with self._dev_lock:
+            tracked = dict(self._tracked)
+        people = []
+        for dev_id, xuid in tracked.items():
+            try:
+                dev = indigo.devices[dev_id]
+            except Exception:  # pylint: disable=broad-except
+                continue                  # device deleted between capture and lookup
+            people.append(_chart_person(dev, xuid))
+        people.sort(key=lambda person: (person["gamertag"] or "").lower())
+        segments = []
+        if self._history is not None:
+            cutoff = (datetime.now().date() - timedelta(days=CHART_DATA_DAYS)).isoformat()
+            segments = self._history.segments_since(cutoff)
+        return {"people": people, "segments": segments, "generated_at": _utc_now_iso()}
+
+    @staticmethod
+    def _chart_reply(status, body):
+        reply = indigo.Dict()
+        reply["status"] = status
+        reply["headers"] = indigo.Dict({"Content-Type": "application/json"})
+        reply["content"] = json.dumps(body)
+        return reply
+
+
+def _chart_person(dev, xuid):
+    """Shape one tracked device's states into the charts payload's person dict."""
+    states = dev.states
+    gamertag = (dev.pluginProps or {}).get("gamertag") or states.get("displayName") or xuid
+    return {
+        "xuid": xuid,
+        "gamertag": gamertag,
+        "displayName": states.get("displayName") or "",
+        "gamerPicUrl": states.get("gamerPicUrl") or "",
+        "live": {
+            "online": bool(states.get("online")),
+            "inGame": bool(states.get("onOffState")),
+            "titleName": states.get("titleName") or "",
+            "titleImageUrl": states.get("titleImageUrl") or "",
+            "sessionMinutes": _as_int(states.get("sessionMinutes")),
+            "todayMinutes": _as_int(states.get("todayMinutes")),
+        },
+    }
+
+
+def _as_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _coerce_interval(value):

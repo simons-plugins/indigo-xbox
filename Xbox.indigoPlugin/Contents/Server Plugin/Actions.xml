@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<!-- The uiPath="hidden" action below is the usage-charts JSON endpoint, served
+     by the Indigo Web Server (IWS) at
+       …/message/com.simons-plugins.indigo-xbox/chart_data
+     It is consumed by the static charts page at
+       …/com.simons-plugins.indigo-xbox/static/charts/index.html
+     Both are reachable locally on the IWS port and remotely via the Reflector,
+     behind whatever authentication IWS has enabled. -->
+<Actions>
+	<Action id="chart_data" uiPath="hidden">
+		<Name>xbox usage chart data</Name>
+		<CallbackMethod>http_chart_data</CallbackMethod>
+	</Action>
+</Actions>
