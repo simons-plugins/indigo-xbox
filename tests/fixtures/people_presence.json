@@ -1,0 +1,86 @@
+{
+  "people": [
+    {
+      "xuid": "1111111111111111",
+      "displayName": "Ari",
+      "gamertag": "AriPlays",
+      "presenceState": "Online",
+      "presenceText": "Halo Infinite",
+      "presenceDevices": null,
+      "presenceDetails": [
+        {
+          "IsBroadcasting": false,
+          "Device": "Scarlett",
+          "PresenceText": "Halo Infinite",
+          "State": "Active",
+          "TitleId": "2043051478",
+          "TitleType": null,
+          "IsPrimary": true,
+          "IsGame": true,
+          "RichPresenceText": "Big Team Battle"
+        }
+      ]
+    },
+    {
+      "xuid": "2222222222222222",
+      "displayName": "Bex",
+      "gamertag": "BexTheBest",
+      "presenceState": "Online",
+      "presenceText": "Home",
+      "presenceDetails": [
+        {
+          "Device": "XboxSeriesX",
+          "PresenceText": "Home",
+          "State": "Active",
+          "TitleId": "750323071",
+          "IsPrimary": true,
+          "IsGame": false
+        }
+      ]
+    },
+    {
+      "xuid": "3333333333333333",
+      "displayName": "Cai",
+      "gamertag": "CaiOffline",
+      "presenceState": "Offline",
+      "presenceText": "Offline",
+      "presenceDetails": null
+    },
+    {
+      "xuid": "4444444444444444",
+      "displayName": "Dee",
+      "gamertag": "DeeAway",
+      "presenceState": "Offline",
+      "presenceText": "Last seen 2h ago",
+      "presenceDetails": []
+    },
+    {
+      "xuid": "5555555555555555",
+      "displayName": "Eli",
+      "gamertag": "EliMulti",
+      "presenceState": "Online",
+      "presenceText": "Minecraft",
+      "presenceDetails": [
+        {
+          "Device": "Win32",
+          "PresenceText": "Xbox App",
+          "State": "Active",
+          "TitleId": "1234500000",
+          "IsPrimary": false,
+          "IsGame": false
+        },
+        {
+          "Device": "Scarlett",
+          "PresenceText": "Minecraft",
+          "State": "Active",
+          "TitleId": "1810924247",
+          "IsPrimary": false,
+          "IsGame": true
+        }
+      ]
+    }
+  ],
+  "recommendationSummary": null,
+  "friendFinderState": null,
+  "accountLinkDetails": null
+}

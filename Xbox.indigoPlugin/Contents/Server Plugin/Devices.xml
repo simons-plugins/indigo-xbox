@@ -1,0 +1,133 @@
+<?xml version="1.0"?>
+<Devices>
+	<!-- One tracked gamertag. A sensor whose on/off state means "currently in a
+	     game"; the display text carries the title (when playing) or the presence
+	     state. SupportsOnState is forced on (hidden prop) so the sensor always
+	     inherits onOffState. -->
+	<Device type="sensor" id="xboxPresence">
+		<Name>Xbox Gamertag</Name>
+		<ConfigUI>
+			<SupportURL>https://github.com/simons-plugins/indigo-xbox</SupportURL>
+			<Field id="person" type="menu">
+				<Label>Person:</Label>
+				<List class="self" method="listPeople" dynamicReload="true"/>
+			</Field>
+			<Field id="personHelp" type="label" fontSize="small" alignWithControl="true">
+				<Label>Only people visible on the authorized account are listed (they must be friends/followers whose online status is shared). Authorize the plugin first if this list is empty. If a family member is not listed, paste their xuid below instead.</Label>
+			</Field>
+			<Field id="manualXuid" type="textfield">
+				<Label>Or enter xuid manually:</Label>
+			</Field>
+			<Field id="manualXuidHelp" type="label" fontSize="small" alignWithControl="true">
+				<Label>Overrides the menu selection when set. Use this to track someone who is not currently in the visible people list.</Label>
+			</Field>
+			<Field id="SupportsOnState" type="checkbox" hidden="true" defaultValue="true">
+				<Label>Show ON/OFF state:</Label>
+			</Field>
+			<Field id="SupportsSensorValue" type="checkbox" hidden="true" defaultValue="false">
+				<Label>Show sensor value state:</Label>
+			</Field>
+		</ConfigUI>
+		<States>
+			<State id="online">
+				<ValueType boolType="TrueFalse">Boolean</ValueType>
+				<TriggerLabel>Online</TriggerLabel>
+				<ControlPageLabel>Online</ControlPageLabel>
+			</State>
+			<State id="presenceState">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Presence State</TriggerLabel>
+				<ControlPageLabel>Presence State</ControlPageLabel>
+			</State>
+			<State id="titleName">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Title (Game)</TriggerLabel>
+				<ControlPageLabel>Title (Game)</ControlPageLabel>
+			</State>
+			<State id="titleId">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Title ID</TriggerLabel>
+				<ControlPageLabel>Title ID</ControlPageLabel>
+			</State>
+			<State id="device">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Device</TriggerLabel>
+				<ControlPageLabel>Device</ControlPageLabel>
+			</State>
+			<State id="lastSeen">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Last Seen</TriggerLabel>
+				<ControlPageLabel>Last Seen</ControlPageLabel>
+			</State>
+			<State id="lastPoll">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Last Poll</TriggerLabel>
+				<ControlPageLabel>Last Poll</ControlPageLabel>
+			</State>
+			<!-- Session stats (computed by the plugin; feed usage charts) -->
+			<State id="sessionStartedAt">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Session Started At</TriggerLabel>
+				<ControlPageLabel>Session Started At</ControlPageLabel>
+			</State>
+			<State id="sessionMinutes">
+				<ValueType>Integer</ValueType>
+				<TriggerLabel>Session Minutes</TriggerLabel>
+				<ControlPageLabel>Session Minutes</ControlPageLabel>
+			</State>
+			<State id="lastSessionMinutes">
+				<ValueType>Integer</ValueType>
+				<TriggerLabel>Last Session Minutes</TriggerLabel>
+				<ControlPageLabel>Last Session Minutes</ControlPageLabel>
+			</State>
+			<State id="todayMinutes">
+				<ValueType>Integer</ValueType>
+				<TriggerLabel>Today Minutes</TriggerLabel>
+				<ControlPageLabel>Today Minutes</ControlPageLabel>
+			</State>
+			<!-- Rich presence detail (from the peoplehub call) -->
+			<State id="richPresenceText">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Rich Presence</TriggerLabel>
+				<ControlPageLabel>Rich Presence</ControlPageLabel>
+			</State>
+			<State id="isBroadcasting">
+				<ValueType boolType="TrueFalse">Boolean</ValueType>
+				<TriggerLabel>Broadcasting</TriggerLabel>
+				<ControlPageLabel>Broadcasting</ControlPageLabel>
+			</State>
+			<State id="inMultiplayer">
+				<ValueType boolType="TrueFalse">Boolean</ValueType>
+				<TriggerLabel>In Multiplayer</TriggerLabel>
+				<ControlPageLabel>In Multiplayer</ControlPageLabel>
+			</State>
+			<!-- Profile extras -->
+			<State id="gamerScore">
+				<ValueType>Integer</ValueType>
+				<TriggerLabel>Gamerscore</TriggerLabel>
+				<ControlPageLabel>Gamerscore</ControlPageLabel>
+			</State>
+			<State id="accountTier">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Account Tier</TriggerLabel>
+				<ControlPageLabel>Account Tier</ControlPageLabel>
+			</State>
+			<State id="gamerPicUrl">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Gamerpic URL</TriggerLabel>
+				<ControlPageLabel>Gamerpic URL</ControlPageLabel>
+			</State>
+			<State id="displayName">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Display Name</TriggerLabel>
+				<ControlPageLabel>Display Name</ControlPageLabel>
+			</State>
+			<!-- Title box art -->
+			<State id="titleImageUrl">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Title Image URL</TriggerLabel>
+				<ControlPageLabel>Title Image URL</ControlPageLabel>
+			</State>
+		</States>
+	</Device>
+</Devices>

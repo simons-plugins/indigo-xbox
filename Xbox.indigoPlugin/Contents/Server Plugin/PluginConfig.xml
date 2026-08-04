@@ -1,0 +1,50 @@
+<?xml version="1.0"?>
+<PluginConfig>
+	<SupportURL>https://github.com/simons-plugins/indigo-xbox</SupportURL>
+
+	<Field id="introLabel" type="label" fontSize="small">
+		<Label>Register an application at portal.azure.com (App registrations → New): "Personal Microsoft accounts only", NO redirect URI. Then, under Authentication, set "Allow public client flows" = Yes. Copy the Application (client) ID and paste it below. Authorize with an ADULT Microsoft account — child accounts cannot sign in to Xbox Live here.</Label>
+	</Field>
+
+	<Field id="clientId" type="textfield">
+		<Label>Application (client) ID:</Label>
+	</Field>
+
+	<Field id="pollInterval" type="textfield" defaultValue="60">
+		<Label>Poll interval (seconds):</Label>
+	</Field>
+
+	<Field id="pollIntervalHelp" type="label" fontSize="small" alignWithControl="true">
+		<Label>How often to check presence (15–600 seconds). Lower values catch shorter sessions but make more API calls.</Label>
+	</Field>
+
+	<Field id="authSeparator" type="separator"/>
+
+	<Field id="authButton" type="button">
+		<Label>Authorize this plugin:</Label>
+		<Title>Authorize</Title>
+		<CallbackMethod>authorizeButtonPressed</CallbackMethod>
+	</Field>
+
+	<Field id="authInstructions" type="textfield" readonly="true">
+		<Label>Verification URL:</Label>
+	</Field>
+
+	<Field id="authUserCode" type="textfield" readonly="true">
+		<Label>User code:</Label>
+	</Field>
+
+	<Field id="authInstructionsHelp" type="label" fontSize="small" alignWithControl="true">
+		<Label>Open the verification URL in a browser and enter the user code, signing in with the ADULT account that follows the gamertags you want to track. The link and code are also written to the Event Log. This dialog can be closed while authorization completes in the background.</Label>
+	</Field>
+
+	<Field id="authStatus" type="textfield" readonly="true">
+		<Label>Status:</Label>
+	</Field>
+
+	<Field id="debugSeparator" type="separator"/>
+
+	<Field id="showDebugInfo" type="checkbox" defaultValue="false">
+		<Label>Enable debug logging:</Label>
+	</Field>
+</PluginConfig>

@@ -1,0 +1,245 @@
+{
+  "xuid": "2719584417856940",
+  "titles": [
+    {
+      "titleId": "1717113201",
+      "pfn": "Microsoft.SeaofThieves_8wekyb3d8bbwe",
+      "bingId": null,
+      "serviceConfigId": "00000000-0000-0000-0000-000066591171",
+      "windowsPhoneProductId": "200c2ce3-f2d5-4085-ac78-b8cf7226ffd6",
+      "name": "Sea of Thieves",
+      "type": "Game",
+      "devices": ["PC", "XboxOne", "XboxSeries"],
+      "displayImage": "http://store-images.s-microsoft.com/image/apps.43328.14554784103656548.0e68e37c-c8b9-4af6-af25-2426996b2dd9.51c2df40-5aae-441e-ad5b-6f05ee2a43da",
+      "mediaItemType": "Application",
+      "modernTitleId": "1717113201",
+      "isBundle": false,
+      "achievement": {
+        "currentAchievements": 2,
+        "totalAchievements": 0,
+        "currentGamerscore": 15,
+        "totalGamerscore": 2740,
+        "progressPercentage": 1.0,
+        "sourceVersion": 2
+      },
+      "stats": null,
+      "gamePass": null,
+      "images": [
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.21958.14554784103656548.6fcc833b-0325-481c-a620-e88ce4adf0e2.1cefcf06-5cd6-4af3-882a-9be53271bd59",
+          "type": "Logo"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.43328.14554784103656548.0e68e37c-c8b9-4af6-af25-2426996b2dd9.51c2df40-5aae-441e-ad5b-6f05ee2a43da",
+          "type": "Tile"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.43251.14554784103656548.32cb1e79-42f2-4166-879d-09ccb8f038fd.28fe5975-9815-4234-a326-9726a08cf46a",
+          "type": "Tile"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.16347.14554784103656548.6c0bfca6-ceff-4368-9bde-2fe50f344136.007dce43-6492-46f2-bb2b-2b28df98fc3c",
+          "type": "Poster"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.6880.14554784103656548.b63ee12b-543e-4fc4-abf2-7289bc489e84.80649d61-fec4-4076-aa88-1d2eebd2c84c",
+          "type": "BoxArt"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.49929.14554784103656548.6c0bfca6-ceff-4368-9bde-2fe50f344136.88fbc331-a034-4ba9-a091-d5c3dee58175",
+          "type": "Logo"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.61467.14554784103656548.6c0bfca6-ceff-4368-9bde-2fe50f344136.cf7a16ec-ac12-454c-9ce9-78c02c61409a",
+          "type": "SuperHeroArt"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.3192.14554784103656548.b63ee12b-543e-4fc4-abf2-7289bc489e84.05814c70-cb91-4ef7-aecd-0a4b8e5667f4",
+          "type": "BrandedKeyArt"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.56440.14554784103656548.6c0bfca6-ceff-4368-9bde-2fe50f344136.4742d116-5b5d-489e-8c7e-7a2e5cd72628",
+          "type": "TitledHeroArt"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.2174.14554784103656548.6c0bfca6-ceff-4368-9bde-2fe50f344136.72c6c04e-b278-4ad7-9d1b-44c815f2b06c",
+          "type": "FeaturePromotionalSquareArt"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.16127.14554784103656548.5229b523-ba31-4e1e-8b9b-af4211062227.7176a52d-9b92-4c1b-b756-af25abfa99c5",
+          "type": "Hero"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.22321.14554784103656548.b63ee12b-543e-4fc4-abf2-7289bc489e84.fbb76bf3-8471-4a23-8657-0e2a5533bfdd",
+          "type": "Screenshot"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.64197.14554784103656548.b63ee12b-543e-4fc4-abf2-7289bc489e84.5f773ba7-b1af-483d-8f83-6c12a66e40b7",
+          "type": "Screenshot"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.46899.14554784103656548.b63ee12b-543e-4fc4-abf2-7289bc489e84.404b042e-254a-4026-9d5b-63a7fc77ac86",
+          "type": "Screenshot"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.32427.14554784103656548.b63ee12b-543e-4fc4-abf2-7289bc489e84.8b8e6b06-df59-4f88-9646-290e2dc04181",
+          "type": "Screenshot"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.56109.14554784103656548.b63ee12b-543e-4fc4-abf2-7289bc489e84.b286756a-e92a-42c7-9866-9a72190dc9f0",
+          "type": "Screenshot"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.5813.14554784103656548.b63ee12b-543e-4fc4-abf2-7289bc489e84.3d275c30-cba6-430e-b0d0-07d2cc051df2",
+          "type": "Screenshot"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.9749.14554784103656548.b63ee12b-543e-4fc4-abf2-7289bc489e84.37589008-60cc-4047-95bb-0d842db13524",
+          "type": "Screenshot"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.29802.14554784103656548.b63ee12b-543e-4fc4-abf2-7289bc489e84.5f976492-14a5-4616-9d78-29ffb2da6527",
+          "type": "Screenshot"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.26361.14554784103656548.b63ee12b-543e-4fc4-abf2-7289bc489e84.583a46c6-a40c-49df-b4d6-572a40f44474",
+          "type": "Screenshot"
+        },
+        {
+          "url": "http://store-images.s-microsoft.com/image/apps.31437.14554784103656548.b63ee12b-543e-4fc4-abf2-7289bc489e84.83c7204b-ee15-44fc-81b6-ff3a48e06a2a",
+          "type": "Screenshot"
+        }
+      ],
+      "titleHistory": null,
+      "detail": {
+        "attributes": [
+          {
+            "applicablePlatforms": null,
+            "maximum": 4,
+            "minimum": 2,
+            "name": "XblOnlineCoop"
+          },
+          {
+            "applicablePlatforms": null,
+            "maximum": 4,
+            "minimum": 2,
+            "name": "XblOnlineMultiPlayer"
+          },
+          {
+            "applicablePlatforms": null,
+            "maximum": null,
+            "minimum": null,
+            "name": "BroadcastSupport"
+          },
+          {
+            "applicablePlatforms": null,
+            "maximum": null,
+            "minimum": null,
+            "name": "XblCrossPlatformMultiPlayer"
+          },
+          {
+            "applicablePlatforms": ["Xbox"],
+            "maximum": null,
+            "minimum": null,
+            "name": "Capability4k"
+          },
+          {
+            "applicablePlatforms": ["Xbox"],
+            "maximum": null,
+            "minimum": null,
+            "name": "CapabilityHDR"
+          },
+          {
+            "applicablePlatforms": ["Xbox", "Desktop"],
+            "maximum": null,
+            "minimum": null,
+            "name": "XblCrossPlatformCoop"
+          },
+          {
+            "applicablePlatforms": null,
+            "maximum": null,
+            "minimum": null,
+            "name": "GameStreaming"
+          },
+          {
+            "applicablePlatforms": null,
+            "maximum": null,
+            "minimum": null,
+            "name": "CapabilityXboxEnhanced"
+          },
+          {
+            "applicablePlatforms": null,
+            "maximum": null,
+            "minimum": null,
+            "name": "XblAchievements"
+          },
+          {
+            "applicablePlatforms": null,
+            "maximum": null,
+            "minimum": null,
+            "name": "XblPresence"
+          },
+          {
+            "applicablePlatforms": null,
+            "maximum": null,
+            "minimum": null,
+            "name": "XblClubs"
+          },
+          {
+            "applicablePlatforms": null,
+            "maximum": null,
+            "minimum": null,
+            "name": "XblCloudSaves"
+          },
+          {
+            "applicablePlatforms": null,
+            "maximum": null,
+            "minimum": null,
+            "name": "XPA"
+          },
+          {
+            "applicablePlatforms": null,
+            "maximum": null,
+            "minimum": null,
+            "name": "XboxLive"
+          }
+        ],
+        "availabilities": [
+          {
+            "Actions": [
+              "Details",
+              "Fulfill",
+              "Purchase",
+              "Browse",
+              "Curate",
+              "Redeem"
+            ],
+            "AvailabilityId": "9R3F7V8SQ2XD",
+            "Platforms": ["PC", "Xbox"],
+            "SkuId": "0010"
+          }
+        ],
+        "capabilities": [
+          "internetClient",
+          "internetClientServer",
+          "privateNetworkClientServer",
+          "codeGeneration"
+        ],
+        "description": "Xbox Live Gold membership required to play on Xbox One; sold separately. \r\n\r\n=========\r\n\r\nAbout the game\r\nSea of Thieves offers the essential pirate experience, from sailing and fighting to exploring and looting – everything you need to live the pirate life and become a legend in your own right. With no set roles, you have complete freedom to approach the world, and other players, however you choose.\r\n\r\nWhether you’re voyaging as a group or sailing solo, you’re bound to encounter other crews in this shared world adventure – but will they be friends or foes, and how will you respond?\r\n\r\nA vast open world\r\nExplore a vast open world filled with unspoiled islands, sunken ships and mysterious artefacts. Take on quests to hunt for lost treasure, seek out cursed Skeleton Captains or gather valuable cargo for the Trading Companies. Go hunting and fishing or choose from hundreds of optional goals and side-quests.\r\n\r\nUnforgettable stories\r\nPlay through the Tall Tales to experience Sea of Thieves’ unique take on a story-driven campaign. With 11 tales to play through across two epic storylines, these immersive and cinematic quests provide around 30 hours of the ultimate pirate fantasy.\r\n\r\nBecome Legend \r\nOn your journey to become a Pirate Legend you’ll amass loot, build a reputation and define a unique personal style with your hard-earned rewards. Adventurer. Explorer. Conqueror. What will your legend be?\r\n\r\nA game that’s always growing\r\nWith five major expansions and almost a year’s worth of monthly updates, Sea of Thieves is a service-based game that is continually growing and evolving. Check back each month to see what new content has been added.",
+        "developerName": "Rare Ltd",
+        "genres": ["Action & adventure"],
+        "publisherName": "Microsoft Studios",
+        "minAge": 12,
+        "releaseDate": "2018-03-20T04:00:00Z",
+        "shortDescription": "Sea of Thieves offers the essential pirate experience, from sailing and fighting to exploring and looting – everything you need to live the pirate life and become a legend in your own right. With no set roles, you have complete freedom to approach the world, and other players, however you choose. \r\n\r\nWhether you’re voyaging as a group or sailing solo, you’re bound to encounter other crews in this shared-world adventure – but will they be friends or foes, and how will you respond?\r\n",
+        "vuiDisplayName": null,
+        "xboxLiveGoldRequired": true
+      },
+      "friendsWhoPlayed": null,
+      "alternateTitleIds": [],
+      "contentBoards": null,
+      "xboxLiveTier": "Full",
+      "isStreamable": true
+    }
+  ]
+}

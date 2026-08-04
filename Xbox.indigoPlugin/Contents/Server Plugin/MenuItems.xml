@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<MenuItems>
+	<MenuItem id="logTrackedPeople">
+		<Name>Log Tracked People</Name>
+		<CallbackMethod>logTrackedPeople</CallbackMethod>
+	</MenuItem>
+</MenuItems>

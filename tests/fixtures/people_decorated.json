@@ -1,0 +1,68 @@
+{
+  "people": [
+    {
+      "xuid": "1111111111111111",
+      "displayName": "Ari",
+      "gamertag": "AriPlays",
+      "gamerScore": "27210",
+      "displayPicRaw": "http://pic/ari.png",
+      "presenceState": "Online",
+      "presenceText": "Halo Infinite",
+      "isBroadcasting": true,
+      "multiplayerSummary": {
+        "InMultiplayerSession": 1,
+        "InParty": 2
+      },
+      "detail": {
+        "accountTier": "Gold",
+        "followerCount": 81,
+        "followingCount": 73,
+        "hasGamePass": true
+      },
+      "presenceDetails": [
+        {
+          "IsBroadcasting": true,
+          "Device": "Scarlett",
+          "PresenceText": "Halo Infinite",
+          "State": "Active",
+          "TitleId": "2043051478",
+          "TitleType": null,
+          "IsPrimary": true,
+          "IsGame": true,
+          "RichPresenceText": "Big Team Battle"
+        }
+      ]
+    },
+    {
+      "xuid": "2222222222222222",
+      "displayName": "Bex",
+      "gamertag": "BexTheBest",
+      "gamerScore": "3802",
+      "displayPicRaw": "http://pic/bex.png",
+      "presenceState": "Online",
+      "presenceText": "Home",
+      "isBroadcasting": false,
+      "multiplayerSummary": {
+        "InMultiplayerSession": 0,
+        "InParty": 0
+      },
+      "detail": {
+        "accountTier": "Silver"
+      },
+      "presenceDetails": [
+        {
+          "IsBroadcasting": false,
+          "Device": "XboxSeriesX",
+          "PresenceText": "Home",
+          "State": "Active",
+          "TitleId": "750323071",
+          "IsPrimary": true,
+          "IsGame": false
+        }
+      ]
+    }
+  ],
+  "recommendationSummary": null,
+  "friendFinderState": null,
+  "accountLinkDetails": null
+}
