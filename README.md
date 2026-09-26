@@ -65,6 +65,38 @@ If a person is not visible you will see "gamertag not visible on this account" o
 their device; fix the follow relationship / privacy setting and it clears on the
 next poll.
 
+## Xbox Console device
+
+Alongside the gamertag ("Xbox Gamertag") device, the plugin offers an
+**"Xbox Console"** device that reports whether the console **itself** is
+powered on — independent of who (if anyone) is signed in and playing.
+
+- **On the console**, go to **Settings → Devices & connections → Remote
+  features** and turn on **"Enable remote features"**. Without this, the
+  console won't appear in the device's **Console** picker.
+- States: `powerState` (raw value: `On` / `ConnectedStandby` / `Off` /
+  `SystemUpdate`), `consoleName`, `consoleType`, `focusedTitleName` /
+  `focusedTitleId` (the game/app in focus, while On), `lastPoll`,
+  `lastPowerChange`.
+- **`onOffState` is true only when `powerState` is exactly `On`.** Turning
+  the console off with the controller (its normal Sleep/Standby power mode)
+  reports `ConnectedStandby`, not `Off` — this still reads as **off**
+  (`onOffState` false), so triggers built on "console turned off" work as
+  expected either way.
+- **Poll interval** — a separate **Console poll interval** preference
+  (15–600 s, default 60) controls how often console devices are checked.
+  Presence keeps its own interval and cadence; no console devices configured
+  means no extra API calls at all.
+- **Power On / Power Off actions** — send a remote power command to the
+  console. **Power On only works when the console's power mode is set to
+  Sleep (sometimes labelled "Standby")** — a console that was fully shut
+  down (Energy saving) cannot be woken remotely. After either action, the
+  device's state catches up on the next console poll (pulled a few seconds
+  sooner automatically).
+- **Example trigger**: *Device State Changed* → the Xbox Console device →
+  `onOffState` → *becomes false* — fires whenever the console goes to sleep
+  or is turned off, whichever way it happened.
+
 ## Usage charts
 
 The plugin ships a self-contained charts page (today's play per gamertag, daily
