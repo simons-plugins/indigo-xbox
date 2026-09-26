@@ -9,6 +9,8 @@ import ``indigo``.
 import json
 import os
 import threading
+import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
 try:
@@ -17,6 +19,7 @@ except ImportError:  # pragma: no cover - only importable inside the Indigo serv
     indigo = None
 
 import xb_constants as xc
+import xb_consoles
 import xb_history
 import xb_presence
 import xb_sessions
@@ -38,6 +41,16 @@ CHART_DATA_DAYS = 30                 # segment window returned to the charts pag
 DEFAULT_POLL_INTERVAL = 60
 MIN_POLL_INTERVAL = 15
 MAX_POLL_INTERVAL = 600
+
+# Console polling (xboxConsole devices) shares the same range/default as
+# presence, so it reuses _coerce_interval() and the same validation text.
+# Backoff (list-call failures) starts at this many seconds and doubles up to
+# the cap; a power action pulls the next poll forward by a short, fixed delay
+# so the state catches up without polling on every action.
+CONSOLE_BACKOFF_BASE = 60
+CONSOLE_BACKOFF_MAX = 900
+CONSOLE_POWER_ACTION_FOLLOWUP_DELAY = 10
+MAX_SLEEP_SLICE = 5
 
 # Gamerscore/tier move slowly, and the profile service is a whole extra call, so
 # the self device refreshes its profile extras only every Nth poll (plus once at
@@ -61,16 +74,38 @@ class Plugin(indigo.PluginBase):
         self._api = None
         self._auth = None
         self._poll_interval = _coerce_interval(plugin_prefs.get("pollInterval"))
+        self._console_poll_interval = _coerce_interval(plugin_prefs.get("consolePollInterval"))
         self._auth_thread = None
         self._stop_auth = threading.Event()
         # Guards the api/auth pair against races between the config UI thread
         # (rebuild) and runConcurrentThread (poll every pollInterval).
         self._client_lock = threading.RLock()
         # dev.id -> xuid for every enabled tracked device; and the ids currently
-        # showing an error, so we clear it exactly once on recovery.
+        # showing an error, so we clear it exactly once on recovery. Console
+        # devices (dev.id -> consoleId) live in a SEPARATE registry — they must
+        # never enter self._tracked (presence sync / charts payload).
         self._tracked = {}
+        self._consoles = {}
         self._errored = set()
         self._dev_lock = threading.RLock()
+        # Last console list from a successful poll — feeds the device-config
+        # menu without an extra API call while the dialog is open.
+        self._last_consoles = []
+        # Focused-title resolution cache: console_id -> {aumid: (name, titleId)
+        # or None for a cached miss}. A miss is cached too so an unresolved
+        # aumid never re-fetches installedApps every poll.
+        self._console_apps = {}
+        # Due-time scheduling for console polling (separate cadence from
+        # presence): 0.0 = due on the next runConcurrentThread tick. A Status
+        # Request pulls this to "now" and polls synchronously; a power action
+        # pulls it a short, fixed delay forward so the state catches up.
+        self._next_console_due = 0.0
+        self._console_backoff_until = 0.0
+        self._console_poll_failures = 0
+        self._console_poll_error_logged = False
+        # One session id per plugin run, reused for every power command sent
+        # this run (per the xccs /commands contract).
+        self._session_id = str(uuid.uuid4())
         # Last people list from a successful poll — feeds the device-config menu
         # and the "Log Tracked People" action without an extra API call.
         self._last_people = []
@@ -162,10 +197,30 @@ class Plugin(indigo.PluginBase):
             self._last_session_snapshot = snapshot
 
     def runConcurrentThread(self):
+        """Presence runs every ``pollInterval`` exactly as before; consoles run
+        every ``consolePollInterval`` on an independent due-time (skipped
+        entirely — no API call — while no console device is configured).
+        Sleeps in short slices so StopThread stays responsive and a Status
+        Request / power action can pull the next console poll forward."""
+        next_presence_due = 0.0
         try:
             while True:
-                self._supervise()
-                self.sleep(self._poll_interval)
+                now = time.time()
+                if now >= next_presence_due:
+                    self._supervise()
+                    next_presence_due = time.time() + self._poll_interval
+                with self._dev_lock:
+                    has_consoles = bool(self._consoles)
+                    console_due = self._next_console_due
+                next_wake = next_presence_due
+                if has_consoles:
+                    if time.time() >= console_due:
+                        self._poll_consoles()
+                        with self._dev_lock:
+                            self._next_console_due = time.time() + self._console_poll_delay()
+                            console_due = self._next_console_due
+                    next_wake = min(next_wake, console_due)
+                self.sleep(max(0.1, min(next_wake - time.time(), MAX_SLEEP_SLICE)))
         except self.StopThread:
             pass
 
@@ -227,6 +282,188 @@ class Plugin(indigo.PluginBase):
             self._self_profile = profile
             self._self_profile_countdown = SELF_PROFILE_REFRESH_EVERY
         return self._self_profile
+
+    # -- Console polling -------------------------------------------------------
+    def _poll_consoles(self):
+        """One console-list call per cycle, fanned out to every configured
+        console device. Never touches presence state or self._tracked."""
+        auth, api = self._auth, self._api
+        if not (auth and api and auth.is_authorized()):
+            return
+        if auth.state() == xc.STATE_AUTH_REQUIRED:
+            return
+        with self._dev_lock:
+            consoles = dict(self._consoles)
+        if not consoles:
+            return
+        try:
+            auth.refresh_if_needed()
+            console_list = xb_consoles.fetch_consoles(api, auth, logger=self.logger)
+        except XboxError as exc:
+            self._handle_console_poll_failure(consoles.keys(), exc)
+            return
+        except Exception as exc:  # pylint: disable=broad-except
+            self.logger.exception(exc)
+            return
+        if console_list is None:
+            return
+        with self._dev_lock:
+            self._console_poll_failures = 0
+            self._console_backoff_until = 0.0
+            self._console_poll_error_logged = False
+        self._last_consoles = console_list
+        by_id = {console.id: console for console in console_list}
+        now_iso = _utc_now_iso()
+        for dev_id, console_id in consoles.items():
+            try:
+                dev = indigo.devices[dev_id]
+            except Exception:  # pylint: disable=broad-except
+                continue                  # device deleted between poll and lookup
+            console = by_id.get(console_id)
+            if console is None:
+                self._set_device_error(dev, "console not found")
+                continue
+            if xb_consoles.display_text(console.power_state) is None:
+                self._set_device_error(dev, "unavailable")
+                continue
+            self._clear_error(dev)
+            self._sync_console_device(dev, console, now_iso)
+
+    def _poll_consoles_now(self):
+        """Synchronous, immediate console poll (Status Request)."""
+        self._poll_consoles()
+        with self._dev_lock:
+            self._next_console_due = time.time() + self._console_poll_delay()
+
+    def _pull_console_poll_forward(self, delay):
+        """Move the next console poll earlier (never later) — used after a
+        power command so the state catches up without polling every action."""
+        with self._dev_lock:
+            target = time.time() + delay
+            if target < self._next_console_due:
+                self._next_console_due = target
+
+    def _console_poll_delay(self):
+        """Seconds until the next console poll: the configured interval, or
+        the remaining backoff delay (honours a 429 ``retry_after`` exactly,
+        even when it is shorter than the configured interval)."""
+        now = time.time()
+        with self._dev_lock:
+            backoff_until = self._console_backoff_until
+        if backoff_until > now:
+            return backoff_until - now
+        return self._console_poll_interval
+
+    def _handle_console_poll_failure(self, dev_ids, exc):
+        """A console-list call failed (transport, 401-after-retry, 429, 5xx,
+        bad JSON, or a list-level errorCode): back off, and error every
+        configured console device once — their last known states are left
+        untouched. Logs one line per failure episode, debug thereafter."""
+        with self._dev_lock:
+            self._console_poll_failures += 1
+            failures = self._console_poll_failures
+        if exc.status == 429 and exc.retry_after:
+            delay = exc.retry_after
+            self.logger.warning("Xbox console poll rate-limited; retrying in %ss", delay)
+        else:
+            delay = min(CONSOLE_BACKOFF_BASE * (2 ** (failures - 1)), CONSOLE_BACKOFF_MAX)
+            self._log_console_failure_once(exc)
+        with self._dev_lock:
+            self._console_backoff_until = time.time() + delay
+        for dev_id in dev_ids:
+            try:
+                dev = indigo.devices[dev_id]
+            except Exception:  # pylint: disable=broad-except
+                continue
+            self._set_device_error(dev, "console list unavailable")
+
+    def _log_console_failure_once(self, exc):
+        with self._dev_lock:
+            already = self._console_poll_error_logged
+            self._console_poll_error_logged = True
+        if already:
+            self.logger.debug("Xbox console poll still failing: %s", exc)
+        else:
+            self.logger.error("Xbox console poll failed: %s", exc)
+
+    def _sync_console_device(self, dev, console, now_iso):
+        """Write only changed console states. The focused title is resolved
+        only while the console is On (one ``/consoles/{id}`` call, then
+        installedApps only for a new aumid); a status or installedApps
+        failure leaves the focused states exactly as they were and never
+        fails the power-state update."""
+        current = dev.states
+        on = xb_consoles.is_on(console.power_state)
+        display = xb_consoles.display_text(console.power_state)
+        focus_name = current.get("focusedTitleName", "")
+        focus_id = current.get("focusedTitleId", "")
+
+        if on:
+            try:
+                status = xb_consoles.fetch_console_status(self._api, self._auth, console.id,
+                                                           logger=self.logger)
+            except Exception as exc:  # pylint: disable=broad-except
+                self.logger.debug("Xbox console status fetch failed for '%s' (states left "
+                                  "as-is): %s", dev.name, exc)
+                status = None
+            if status is not None:
+                aumid = status.focus_app_aumid
+                if aumid:
+                    resolved = self._resolve_focused_title(console.id, aumid)
+                    if resolved is not None:
+                        focus_name, focus_id = resolved
+                    # else: installedApps fetch failed — leave as-is (see below)
+                else:
+                    focus_name, focus_id = "", ""       # at the home menu / dashboard
+            # else: status fetch failed — leave focus_name/focus_id as-is
+        else:
+            focus_name, focus_id = "", ""
+
+        batch = []
+        for key, value in (("powerState", console.power_state),
+                           ("consoleName", console.name),
+                           ("consoleType", console.console_type),
+                           ("focusedTitleName", focus_name),
+                           ("focusedTitleId", focus_id)):
+            if current.get(key) != value:
+                batch.append({"key": key, "value": value})
+
+        # A real transition; also stamped on the very first poll (previous
+        # powerState is "" then), so the state is never left blank.
+        if current.get("powerState") != console.power_state:
+            batch.append({"key": "lastPowerChange", "value": now_iso})
+
+        display_value = focus_name if (on and focus_name) else display
+        if current.get("onOffState") != on or current.get("powerState") != console.power_state:
+            batch.append({"key": "onOffState", "value": on, "uiValue": display_value})
+
+        if batch:
+            dev.updateStatesOnServer(batch)
+        dev.updateStateOnServer("lastPoll", value=now_iso)   # heartbeat, matches presence
+
+    def _resolve_focused_title(self, console_id, aumid):
+        """Resolve ``aumid`` -> ``(titleName, titleId)`` via a cached
+        installedApps lookup, keyed per console id. A miss for a specific
+        aumid is cached too so an unmatched aumid never re-fetches every
+        poll; the app list itself is only refetched when a new, unseen aumid
+        appears. Returns ``None`` (meaning: leave state unchanged) only when
+        the installedApps fetch itself fails."""
+        cache = self._console_apps.setdefault(console_id, {})
+        if aumid in cache:
+            return cache[aumid] or ("", "")
+        try:
+            apps = xb_consoles.fetch_installed_apps(self._api, self._auth, console_id,
+                                                    logger=self.logger) or []
+        except Exception as exc:  # pylint: disable=broad-except
+            self.logger.debug("Xbox installed-apps fetch failed for console %s (states left "
+                              "as-is): %s", console_id, exc)
+            return None
+        for app in apps:
+            if app.aumid:
+                cache[app.aumid] = (app.name, app.title_id)
+        if aumid not in cache:
+            cache[aumid] = None            # cache the miss too
+        return cache[aumid] or ("", "")
 
     # -- Client construction -------------------------------------------------
     def _prefs_dir(self):
@@ -345,6 +582,15 @@ class Plugin(indigo.PluginBase):
             if not MIN_POLL_INTERVAL <= value <= MAX_POLL_INTERVAL:
                 errors["pollInterval"] = (f"Poll interval must be between {MIN_POLL_INTERVAL} "
                                           f"and {MAX_POLL_INTERVAL} seconds.")
+        console_interval = valuesDict.get("consolePollInterval", str(DEFAULT_POLL_INTERVAL))
+        try:
+            console_value = int(console_interval)
+        except (TypeError, ValueError):
+            errors["consolePollInterval"] = "Poll interval must be a whole number of seconds."
+        else:
+            if not MIN_POLL_INTERVAL <= console_value <= MAX_POLL_INTERVAL:
+                errors["consolePollInterval"] = (f"Poll interval must be between {MIN_POLL_INTERVAL} "
+                                                 f"and {MAX_POLL_INTERVAL} seconds.")
         if len(errors) > 0:
             return (False, valuesDict, errors)
         return (True, valuesDict)
@@ -354,11 +600,19 @@ class Plugin(indigo.PluginBase):
             return
         self.debug = valuesDict.get("showDebugInfo", False)
         self._poll_interval = _coerce_interval(valuesDict.get("pollInterval"))
+        self._console_poll_interval = _coerce_interval(valuesDict.get("consolePollInterval"))
         self._rebuild_client()
 
     # -- Device lifecycle ----------------------------------------------------
     def deviceStartComm(self, dev):  # noqa: N803
         dev.stateListOrDisplayStateIdChanged()  # pick up state keys added in newer Devices.xml revisions
+        if dev.deviceTypeId == "xboxConsole":
+            console_id = (dev.pluginProps or {}).get("consoleId", "")
+            with self._dev_lock:
+                self._consoles[dev.id] = console_id
+            self.logger.info("Xbox console device '%s' started (console=%s)",
+                             dev.name, console_id)
+            return
         xuid = (dev.pluginProps or {}).get("xuid", "")
         with self._dev_lock:
             self._tracked[dev.id] = xuid
@@ -367,9 +621,13 @@ class Plugin(indigo.PluginBase):
     def deviceStopComm(self, dev):  # noqa: N803
         with self._dev_lock:
             self._tracked.pop(dev.id, None)
+            self._consoles.pop(dev.id, None)
             self._errored.discard(dev.id)
 
     def didDeviceCommPropertyChange(self, origDev, newDev):  # noqa: N803
+        if newDev.deviceTypeId == "xboxConsole":
+            return ((origDev.pluginProps or {}).get("consoleId")
+                    != (newDev.pluginProps or {}).get("consoleId"))
         return (origDev.pluginProps or {}).get("xuid") != (newDev.pluginProps or {}).get("xuid")
 
     # -- Presence → device state sync ----------------------------------------
@@ -405,11 +663,16 @@ class Plugin(indigo.PluginBase):
         return own[0] if own else ""
 
     def _mark_unknown(self, dev):
+        self._set_device_error(dev, "gamertag not visible on this account")
+
+    def _set_device_error(self, dev, message):
+        """Set an error state on ``dev`` exactly once per error episode (shared
+        by the presence and console paths — dev.id is unique across both)."""
         with self._dev_lock:
             already = dev.id in self._errored
             self._errored.add(dev.id)
         if not already:
-            dev.setErrorStateOnServer("gamertag not visible on this account")
+            dev.setErrorStateOnServer(message)
 
     def _clear_error(self, dev):
         with self._dev_lock:
@@ -509,7 +772,29 @@ class Plugin(indigo.PluginBase):
             options.insert(0, (own_xuid, f"Me — {own_gamertag}" if own_gamertag else "Me"))
         return options
 
+    def listConsoles(self, filter="", valuesDict=None, typeId="", targetId=0):  # noqa: A002, N803, ARG002
+        """Dynamic menu of consoles on the account: ``name (consoleType)``.
+
+        Always does a live fetch (unlike :meth:`listPeople`, there is no cheap
+        "last poll" to fall back on while no console device is configured
+        yet — consoles are never polled until one exists)."""
+        if not (self._auth and self._auth.is_authorized()):
+            return []
+        try:
+            consoles = xb_consoles.fetch_consoles(self._api, self._auth, logger=self.logger)
+        except XboxError as exc:
+            self.logger.warning("Xbox: could not load console list: %s", exc)
+            return []
+        if not consoles:
+            return []
+        self._last_consoles = consoles
+        options = [(c.id, f"{c.name} ({c.console_type})") for c in consoles if c.id]
+        options.sort(key=lambda item: item[1].lower())
+        return options
+
     def validateDeviceConfigUi(self, valuesDict, typeId, devId):  # noqa: N803, ARG002
+        if typeId == "xboxConsole":
+            return self._validate_console_device_config(valuesDict)
         manual = valuesDict.get("manualXuid", "").strip()
         selected = valuesDict.get("person", "").strip()
         xuid = manual or selected
@@ -525,6 +810,21 @@ class Plugin(indigo.PluginBase):
                     break
         valuesDict["xuid"] = xuid
         valuesDict["gamertag"] = gamertag or valuesDict.get("gamertag") or xuid
+        return (True, valuesDict)
+
+    def _validate_console_device_config(self, valuesDict):
+        console_id = valuesDict.get("console", "").strip()
+        if not console_id:
+            errors = indigo.Dict()
+            errors["console"] = "Choose a console."
+            return (False, valuesDict, errors)
+        name = ""
+        for console in self._last_consoles:
+            if console.id == console_id:
+                name = console.name
+                break
+        valuesDict["consoleId"] = console_id
+        valuesDict["consoleName"] = name or valuesDict.get("consoleName") or console_id
         return (True, valuesDict)
 
     # -- Menu items ----------------------------------------------------------
@@ -562,6 +862,44 @@ class Plugin(indigo.PluginBase):
             self.logger.info("  %s (xuid=%s) %s — %s%s",
                              person.gamertag, person.xuid, person.state, title,
                              _score_suffix(person))
+
+    # -- Device actions (Status Request / console power) ---------------------
+    def actionControlUniversal(self, action, dev):  # noqa: N803
+        if action.deviceAction == indigo.kUniversalAction.RequestStatus:
+            if dev.deviceTypeId == "xboxConsole":
+                self.logger.debug("Xbox console '%s': status request — polling now", dev.name)
+                self._poll_consoles_now()
+            else:
+                self.logger.debug("Xbox: status request for '%s' (nothing to do — presence "
+                                  "is polled on its own schedule)", dev.name)
+
+    def powerOnConsole(self, action, dev=None):  # noqa: N802, N803, ARG002
+        self._send_console_power_command(dev, xc.POWER_COMMAND_WAKE_UP, "power on")
+
+    def powerOffConsole(self, action, dev=None):  # noqa: N802, N803, ARG002
+        self._send_console_power_command(dev, xc.POWER_COMMAND_TURN_OFF, "power off")
+
+    def _send_console_power_command(self, dev, command, label):
+        if dev is None:
+            self.logger.error("Xbox console %s failed — no device selected", label)
+            return
+        console_id = (dev.pluginProps or {}).get("consoleId", "")
+        if not console_id:
+            self.logger.error("Xbox console '%s': %s failed — device is not configured with "
+                              "a console", dev.name, label)
+            return
+        auth, api = self._auth, self._api
+        if not (auth and api and auth.is_authorized()):
+            self.logger.error("Xbox console '%s': %s failed — not authorized", dev.name, label)
+            return
+        try:
+            xb_consoles.send_power_command(api, auth, console_id, command, self._session_id,
+                                           logger=self.logger)
+        except XboxError as exc:
+            self.logger.error("Xbox console '%s': %s failed — %s", dev.name, label, exc)
+            return
+        self.logger.info("Xbox console '%s': %s sent", dev.name, label)
+        self._pull_console_poll_forward(CONSOLE_POWER_ACTION_FOLLOWUP_DELAY)
 
     # -- Usage-charts HTTP endpoint (IWS hidden action) ----------------------
     def http_chart_data(self, action, dev=None, caller_waiting_for_result=None):  # noqa: N803, ARG002

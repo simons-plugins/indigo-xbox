@@ -11,4 +11,14 @@
 		<Name>xbox usage chart data</Name>
 		<CallbackMethod>http_chart_data</CallbackMethod>
 	</Action>
+
+	<Action id="powerOnConsole" deviceFilter="self.xboxConsole">
+		<Name>Power On Xbox Console</Name>
+		<CallbackMethod>powerOnConsole</CallbackMethod>
+	</Action>
+
+	<Action id="powerOffConsole" deviceFilter="self.xboxConsole">
+		<Name>Power Off Xbox Console</Name>
+		<CallbackMethod>powerOffConsole</CallbackMethod>
+	</Action>
 </Actions>
