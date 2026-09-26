@@ -35,7 +35,16 @@ All notable changes to the Xbox plugin are documented here.
   from a successful list, or reporting `Unknown`/a missing `powerState`, is
   reported as "unavailable"/"console not found", not Off. A `/consoles/{id}`
   or `installedApps` failure never breaks the power-state update — only the
-  focused-title states are left as they were.
+  focused-title states are left as they were. Losing authorization mid-run
+  (revoked/expired, or a Status Request/poll with no XBL header) now also
+  errors every configured console device as "not authorized" instead of
+  going quiet, and a recovered console-list poll after a logged failure logs
+  one "Xbox console poll recovered" line. A device stuck on one error message
+  now updates immediately when a *different* failure supersedes it (e.g.
+  "console list unavailable" → "not authorized"), instead of being stuck
+  showing the first message for the whole episode. `listConsoles`'s dialog
+  picker now hints to check Settings → Devices & connections → Remote
+  features when the console list fails with `RemoteManagementDisabled`.
 
 ## 2026.1.0 — Usage charts
 

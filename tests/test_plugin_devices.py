@@ -465,3 +465,54 @@ def test_poll_interval_clamped():
     assert plugin._coerce_interval("9999") == plugin.MAX_POLL_INTERVAL
     assert plugin._coerce_interval("nonsense") == plugin.DEFAULT_POLL_INTERVAL
     assert plugin._coerce_interval("120") == 120
+
+
+# -- consolePollInterval validation --------------------------------------------
+
+def _base_prefs(**overrides):
+    values = {"clientId": "abc", "pollInterval": "60", "consolePollInterval": "60"}
+    values.update(overrides)
+    return values
+
+
+def test_console_poll_interval_valid_passes():
+    p = _plugin()
+    result = p.validatePrefsConfigUi(_base_prefs(consolePollInterval="30"))
+    assert result[0] is True
+
+
+def test_console_poll_interval_missing_defaults_ok():
+    """No consolePollInterval key at all (e.g. an old prefs dict) must not
+    fail validation — the code falls back to the default before checking."""
+    p = _plugin()
+    values = _base_prefs()
+    del values["consolePollInterval"]
+    result = p.validatePrefsConfigUi(values)
+    assert result[0] is True
+
+
+def test_console_poll_interval_non_int_fails():
+    p = _plugin()
+    ok, _values, errors = p.validatePrefsConfigUi(_base_prefs(consolePollInterval="nonsense"))
+    assert ok is False
+    assert "consolePollInterval" in errors
+
+
+def test_console_poll_interval_below_min_fails():
+    p = _plugin()
+    ok, _values, errors = p.validatePrefsConfigUi(_base_prefs(consolePollInterval="14"))
+    assert ok is False
+    assert "consolePollInterval" in errors
+
+
+def test_console_poll_interval_above_max_fails():
+    p = _plugin()
+    ok, _values, errors = p.validatePrefsConfigUi(_base_prefs(consolePollInterval="601"))
+    assert ok is False
+    assert "consolePollInterval" in errors
+
+
+def test_closed_prefs_config_ui_updates_console_poll_interval():
+    p = _plugin()
+    p.closedPrefsConfigUi(_base_prefs(consolePollInterval="45"), userCancelled=False)
+    assert p._console_poll_interval == 45

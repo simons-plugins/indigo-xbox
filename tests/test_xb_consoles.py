@@ -56,10 +56,34 @@ def test_parse_console_list_standby():
     assert consoles[0].power_state == "ConnectedStandby"
 
 
-def test_parse_console_list_missing_result_is_empty():
-    assert xb_consoles.parse_console_list({"status": {"errorCode": "OK"}}) == []
-    assert xb_consoles.parse_console_list({}) == []
-    assert xb_consoles.parse_console_list(None) == []
+def test_parse_console_list_explicit_empty_result_is_empty():
+    assert xb_consoles.parse_console_list({"result": [],
+                                           "status": {"errorCode": "OK"}}) == []
+
+
+def test_parse_console_list_missing_result_raises():
+    with pytest.raises(XboxError):
+        xb_consoles.parse_console_list({"status": {"errorCode": "OK"}})
+    with pytest.raises(XboxError):
+        xb_consoles.parse_console_list({})
+    with pytest.raises(XboxError):
+        xb_consoles.parse_console_list(None)
+
+
+def test_parse_console_list_non_dict_payload_raises():
+    with pytest.raises(XboxError):
+        xb_consoles.parse_console_list(["not", "a", "dict"])
+    with pytest.raises(XboxError):
+        xb_consoles.parse_console_list("also not a dict")
+
+
+def test_parse_console_list_non_dict_items_skipped():
+    payload = {"result": [{"id": "C1", "name": "Zed", "consoleType": "XboxOne",
+                          "powerState": "On"}, "garbage", 42, None],
+              "status": {"errorCode": "OK"}}
+    consoles = xb_consoles.parse_console_list(payload)
+    assert len(consoles) == 1
+    assert consoles[0].id == "C1"
 
 
 def test_parse_console_list_error_code_raises_with_code_in_message():
@@ -92,9 +116,28 @@ def test_parse_console_status_error_code_raises():
     assert "CurrentConsoleNotFound" in str(excinfo.value)
 
 
-def test_parse_console_status_missing_fields_default_blank():
-    status = xb_consoles.parse_console_status({})
-    assert status.power_state == ""
+def test_parse_console_status_missing_power_state_raises():
+    with pytest.raises(XboxError):
+        xb_consoles.parse_console_status({})
+    with pytest.raises(XboxError):
+        xb_consoles.parse_console_status({"focusAppAumid": "GAME.Halo!App"})
+
+
+def test_parse_console_status_non_dict_payload_raises():
+    with pytest.raises(XboxError):
+        xb_consoles.parse_console_status(["not", "a", "dict"])
+
+
+def test_parse_console_status_aumid_absent_is_none_unknown_focus():
+    """No ``focusAppAumid`` key at all -> None, meaning "unknown, leave the
+    caller's focused states as they were" — distinct from an explicit blank
+    string (the dashboard)."""
+    status = xb_consoles.parse_console_status({"powerState": "On"})
+    assert status.focus_app_aumid is None
+
+
+def test_parse_console_status_aumid_blank_is_dashboard():
+    status = xb_consoles.parse_console_status({"powerState": "On", "focusAppAumid": ""})
     assert status.focus_app_aumid == ""
 
 
@@ -112,10 +155,29 @@ def test_parse_installed_apps():
     assert home.is_game is False
 
 
-def test_parse_installed_apps_missing_result_is_empty():
-    assert xb_consoles.parse_installed_apps({}) == []
-    assert xb_consoles.parse_installed_apps({"result": None}) == []
-    assert xb_consoles.parse_installed_apps(None) == []
+def test_parse_installed_apps_explicit_empty_result_is_empty():
+    assert xb_consoles.parse_installed_apps({"result": [],
+                                             "status": {"errorCode": "OK"}}) == []
+
+
+def test_parse_installed_apps_missing_result_raises():
+    """A missing/malformed ``result`` is a failed call, not "no apps installed"
+    — the caller (``_resolve_focused_title``) must treat it as a failure and
+    cache nothing, not bless it as a real (empty) app list."""
+    with pytest.raises(XboxError):
+        xb_consoles.parse_installed_apps({})
+    with pytest.raises(XboxError):
+        xb_consoles.parse_installed_apps({"result": None})
+    with pytest.raises(XboxError):
+        xb_consoles.parse_installed_apps(None)
+
+
+def test_parse_installed_apps_error_code_raises():
+    payload = {"result": [], "status": {"errorCode": "InvalidDeviceId",
+                                        "errorMessage": "bad id"}}
+    with pytest.raises(XboxError) as excinfo:
+        xb_consoles.parse_installed_apps(payload)
+    assert "InvalidDeviceId" in str(excinfo.value)
 
 
 # -- fetch_consoles ----------------------------------------------------------------

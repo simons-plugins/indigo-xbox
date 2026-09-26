@@ -30,10 +30,15 @@ class ConsoleInfo:
 class ConsoleStatus:
     """A single console's ``/consoles/{id}`` status — only the fields the
     plugin needs (focused-title resolution; power state is already known
-    from the list call that decided this device was worth a status call)."""
+    from the list call that decided this device was worth a status call).
+
+    ``focus_app_aumid`` is ``None`` when the field is absent from the payload
+    (meaning: unknown — the caller must leave its focused-title states as
+    they were), and ``""`` when the field is present but blank (the
+    dashboard, with nothing focused)."""
 
     power_state: str
-    focus_app_aumid: str
+    focus_app_aumid: str  # None = unknown/absent, "" = dashboard, else an aumid
     playback_state: str = ""
     login_state: str = ""
 
@@ -94,12 +99,16 @@ def _check_status(payload, context):
 def parse_console_list(payload):
     """Parse a ``GET /lists/devices`` response into a list of
     :class:`ConsoleInfo`. Raises :class:`XboxError` when the response's own
-    ``status.errorCode`` is not ``"OK"`` (e.g. ``RemoteManagementDisabled``).
-    A missing/malformed ``result`` array yields an empty list."""
+    ``status.errorCode`` is not ``"OK"`` (e.g. ``RemoteManagementDisabled``),
+    when the payload is not a dict, or when ``result`` is missing/not a list
+    — those are failed calls, not "no consoles". Only an explicit empty
+    ``result`` list yields ``[]``."""
+    if not isinstance(payload, dict):
+        raise XboxError("xccs console list error: invalid response")
     _check_status(payload, "console list")
-    result = (payload or {}).get("result")
+    result = payload.get("result")
     if not isinstance(result, list):
-        return []
+        raise XboxError("xccs console list error: missing result")
     consoles = []
     for item in result:
         if not isinstance(item, dict):
@@ -116,12 +125,19 @@ def parse_console_list(payload):
 
 def parse_console_status(payload):
     """Parse a ``GET /consoles/{id}`` response into a :class:`ConsoleStatus`.
-    Raises :class:`XboxError` when ``status.errorCode`` is not ``"OK"``."""
+    Raises :class:`XboxError` when ``status.errorCode`` is not ``"OK"``, when
+    the payload is not a dict, or when ``powerState`` is missing/blank — a
+    status response the caller can't even tell On from Off from is a failed
+    call, not "everything blank"."""
+    if not isinstance(payload, dict):
+        raise XboxError("xccs console status error: invalid response")
     _check_status(payload, "console status")
-    payload = payload or {}
+    power_state = payload.get("powerState")
+    if not power_state:
+        raise XboxError("xccs console status error: missing powerState")
     return ConsoleStatus(
-        power_state=payload.get("powerState") or "",
-        focus_app_aumid=payload.get("focusAppAumid") or "",
+        power_state=power_state,
+        focus_app_aumid=payload.get("focusAppAumid"),
         playback_state=payload.get("playbackState") or "",
         login_state=payload.get("loginState") or "",
     )
@@ -129,11 +145,14 @@ def parse_console_status(payload):
 
 def parse_installed_apps(payload):
     """Parse a ``GET /lists/installedApps`` response into a list of
-    :class:`InstalledApp`. A missing/malformed ``result`` array yields an
-    empty list rather than raising."""
+    :class:`InstalledApp`. Raises :class:`XboxError` when the response's own
+    ``status.errorCode`` is not ``"OK"``, or when ``result`` is
+    missing/not a list — those are failed calls, not "no apps installed".
+    Only an explicit empty ``result`` list yields ``[]``."""
+    _check_status(payload, "installed apps")
     result = (payload or {}).get("result")
     if not isinstance(result, list):
-        return []
+        raise XboxError("xccs installed apps error: missing result")
     apps = []
     for item in result:
         if not isinstance(item, dict):
