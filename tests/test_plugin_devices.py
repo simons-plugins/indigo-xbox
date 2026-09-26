@@ -180,6 +180,28 @@ def test_error_state_set_only_once():
     assert dev.error_calls == ["gamertag not visible on this account"]
 
 
+def test_sync_all_lookup_keyerror_skips_quietly_other_error_is_logged(caplog):
+    """KeyError = device deleted (skip quietly); anything else = the lookup
+    itself broke — logged, never silently swallowed."""
+    p = _plugin()
+    p._tracked = {101: "X1", 102: "X2"}
+
+    class _Devices:
+        def __getitem__(self, dev_id):
+            if dev_id == 101:
+                raise KeyError(dev_id)
+            raise RuntimeError("devices collection broke")
+    indigo.devices, real_devices = _Devices(), indigo.devices
+    try:
+        with caplog.at_level(logging.DEBUG):
+            p._sync_all([_presence("X1"), _presence("X2")])   # must not raise
+    finally:
+        indigo.devices = real_devices
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "devices collection broke" in str(errors[0].exc_info[1])
+
+
 # -- ConfigUI -----------------------------------------------------------------
 
 def test_list_people_from_last_poll():
@@ -465,3 +487,54 @@ def test_poll_interval_clamped():
     assert plugin._coerce_interval("9999") == plugin.MAX_POLL_INTERVAL
     assert plugin._coerce_interval("nonsense") == plugin.DEFAULT_POLL_INTERVAL
     assert plugin._coerce_interval("120") == 120
+
+
+# -- consolePollInterval validation --------------------------------------------
+
+def _base_prefs(**overrides):
+    values = {"clientId": "abc", "pollInterval": "60", "consolePollInterval": "60"}
+    values.update(overrides)
+    return values
+
+
+def test_console_poll_interval_valid_passes():
+    p = _plugin()
+    result = p.validatePrefsConfigUi(_base_prefs(consolePollInterval="30"))
+    assert result[0] is True
+
+
+def test_console_poll_interval_missing_defaults_ok():
+    """No consolePollInterval key at all (e.g. an old prefs dict) must not
+    fail validation — the code falls back to the default before checking."""
+    p = _plugin()
+    values = _base_prefs()
+    del values["consolePollInterval"]
+    result = p.validatePrefsConfigUi(values)
+    assert result[0] is True
+
+
+def test_console_poll_interval_non_int_fails():
+    p = _plugin()
+    ok, _values, errors = p.validatePrefsConfigUi(_base_prefs(consolePollInterval="nonsense"))
+    assert ok is False
+    assert "consolePollInterval" in errors
+
+
+def test_console_poll_interval_below_min_fails():
+    p = _plugin()
+    ok, _values, errors = p.validatePrefsConfigUi(_base_prefs(consolePollInterval="14"))
+    assert ok is False
+    assert "consolePollInterval" in errors
+
+
+def test_console_poll_interval_above_max_fails():
+    p = _plugin()
+    ok, _values, errors = p.validatePrefsConfigUi(_base_prefs(consolePollInterval="601"))
+    assert ok is False
+    assert "consolePollInterval" in errors
+
+
+def test_closed_prefs_config_ui_updates_console_poll_interval():
+    p = _plugin()
+    p.closedPrefsConfigUi(_base_prefs(consolePollInterval="45"), userCancelled=False)
+    assert p._console_poll_interval == 45

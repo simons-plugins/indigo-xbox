@@ -1,0 +1,19 @@
+{
+  "result": [
+    {
+      "aumid": "GAMESTUDIO.HaloInfinite_8wekyb3d8bbwe!HaloInfinite",
+      "titleId": 2050424108,
+      "name": "Halo Infinite",
+      "isGame": true,
+      "status": "Ready"
+    },
+    {
+      "aumid": "Microsoft.Xbox.HomeApp_8wekyb3d8bbwe!Xbox.Home.Application",
+      "titleId": 750323071,
+      "name": "Home",
+      "isGame": false,
+      "status": "Ready"
+    }
+  ],
+  "status": {"errorCode": "OK", "errorMessage": null}
+}

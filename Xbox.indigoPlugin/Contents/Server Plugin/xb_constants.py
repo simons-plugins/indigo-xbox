@@ -91,6 +91,30 @@ REFRESH_BACKOFF_MAX = 60 * 60
 # XSTS tokens carry their own NotAfter; re-derive this many seconds before it.
 XSTS_MARGIN = 5 * 60
 
+# -- Console management (xccs) — SmartGlass console power/status/apps --------
+# Verified in a live spike: the existing XBL3.0 header (xbl_header(), XSTS
+# relying party http://xboxlive.com) authorizes these calls too — no separate
+# auth. Headers/paths mirror xbox-webapi-python's SmartglassProvider.
+XCCS_CONSOLE_LIST_URL = ("https://xccs.xboxlive.com/lists/devices"
+                         "?queryCurrentDevice=false&includeStorageDevices=false")
+XCCS_CONSOLE_STATUS_URL = "https://xccs.xboxlive.com/consoles/{console_id}"
+XCCS_INSTALLED_APPS_URL = "https://xccs.xboxlive.com/lists/installedApps?deviceId={console_id}"
+XCCS_COMMANDS_URL = "https://xccs.xboxlive.com/commands"
+XCCS_CONTRACT_VERSION = "4"
+XCCS_SKILL_PLATFORM = "RemoteManagement"
+
+# Power command body (POST /commands)
+POWER_COMMAND_SOURCE_ID = "com.microsoft.smartglass"
+POWER_COMMAND_WAKE_UP = "WakeUp"
+POWER_COMMAND_TURN_OFF = "TurnOff"
+
+# Console powerState values (xccs console list / status)
+POWER_STATE_ON = "On"
+POWER_STATE_STANDBY = "ConnectedStandby"
+POWER_STATE_OFF = "Off"
+POWER_STATE_UPDATING = "SystemUpdate"
+POWER_STATE_UNKNOWN = "Unknown"
+
 # -- Auth states surfaced to the plugin / status line -------------------------
 STATE_UNAUTHORIZED = "unauthorized"
 STATE_PENDING = "pending"

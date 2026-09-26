@@ -130,4 +130,65 @@
 			</State>
 		</States>
 	</Device>
+
+	<!-- One tracked Xbox CONSOLE (not a gamertag): reports whether the console
+	     itself is powered on, via the SmartGlass console-management API (xccs).
+	     onOffState (inherited) means powerState == "On"; ConnectedStandby (the
+	     controller power-off state) reads as off, not just "not On". -->
+	<Device type="sensor" id="xboxConsole">
+		<Name>Xbox Console</Name>
+		<ConfigUI>
+			<SupportURL>https://github.com/simons-plugins/indigo-xbox</SupportURL>
+			<Field id="console" type="menu">
+				<Label>Console:</Label>
+				<List class="self" method="listConsoles" dynamicReload="true"/>
+			</Field>
+			<Field id="consoleHelp" type="label" fontSize="small" alignWithControl="true">
+				<Label>Consoles come from the authorized account. On the console itself, go to Settings → Devices &amp; connections → Remote features and turn on "Enable remote features". For Power On to work, the console's power mode must also be set to Sleep (sometimes shown as "Standby") rather than Full shutdown/Energy saving.</Label>
+			</Field>
+			<Field id="SupportsOnState" type="checkbox" hidden="true" defaultValue="true">
+				<Label>Show ON/OFF state:</Label>
+			</Field>
+			<Field id="SupportsSensorValue" type="checkbox" hidden="true" defaultValue="false">
+				<Label>Show sensor value state:</Label>
+			</Field>
+		</ConfigUI>
+		<States>
+			<State id="powerState">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Power State</TriggerLabel>
+				<ControlPageLabel>Power State</ControlPageLabel>
+			</State>
+			<State id="consoleName">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Console Name</TriggerLabel>
+				<ControlPageLabel>Console Name</ControlPageLabel>
+			</State>
+			<State id="consoleType">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Console Type</TriggerLabel>
+				<ControlPageLabel>Console Type</ControlPageLabel>
+			</State>
+			<State id="focusedTitleName">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Focused Title</TriggerLabel>
+				<ControlPageLabel>Focused Title</ControlPageLabel>
+			</State>
+			<State id="focusedTitleId">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Focused Title ID</TriggerLabel>
+				<ControlPageLabel>Focused Title ID</ControlPageLabel>
+			</State>
+			<State id="lastPoll">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Last Poll</TriggerLabel>
+				<ControlPageLabel>Last Poll</ControlPageLabel>
+			</State>
+			<State id="lastPowerChange">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Last Power Change</TriggerLabel>
+				<ControlPageLabel>Last Power Change</ControlPageLabel>
+			</State>
+		</States>
+	</Device>
 </Devices>

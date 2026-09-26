@@ -18,6 +18,14 @@
 		<Label>How often to check presence (15–600 seconds). Lower values catch shorter sessions but make more API calls.</Label>
 	</Field>
 
+	<Field id="consolePollInterval" type="textfield" defaultValue="60">
+		<Label>Console poll interval (seconds):</Label>
+	</Field>
+
+	<Field id="consolePollIntervalHelp" type="label" fontSize="small" alignWithControl="true">
+		<Label>How often to check Xbox Console devices (15–600 seconds). Only spends an API call when at least one Xbox Console device is configured.</Label>
+	</Field>
+
 	<Field id="authSeparator" type="separator"/>
 
 	<Field id="authButton" type="button">

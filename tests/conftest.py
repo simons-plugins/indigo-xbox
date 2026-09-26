@@ -101,6 +101,7 @@ def _install_fake_indigo():
     fake.devices = _FakeDevices()
     fake.Dict = dict
     fake.List = list
+    fake.kUniversalAction = types.SimpleNamespace(RequestStatus="requestStatus", Beep="beep")
     sys.modules.setdefault("indigo", fake)
 
 

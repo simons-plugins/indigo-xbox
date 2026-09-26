@@ -1,0 +1,1388 @@
+"""Tests for the xboxConsole device layer in plugin.py: the separate console
+registry (never _tracked), console-list -> per-device sync (change-only writes,
+power transitions, focused-title resolution + caching), degradation paths
+(status/installedApps failure, console-list failure + backoff, console missing
+from the list), Status Request, and the power on/off actions."""
+import logging
+
+import pytest
+
+import indigo   # the conftest fake
+import plugin
+import xb_constants as xc
+from support import FakeAPI, oauth_error
+from xb_consoles import ConsoleInfo
+
+
+def _plugin():
+    return plugin.Plugin("com.simons-plugins.indigo-xbox", "Xbox", "2026.2.0", {})
+
+
+def _console(console_id, name="Living room Xbox", console_type="XboxSeriesS",
+            power_state="On"):
+    return ConsoleInfo(id=console_id, name=name, console_type=console_type,
+                      power_state=power_state, remote_management_enabled=True)
+
+
+def _console_device(dev_id, console_id, states=None):
+    dev = indigo.Device(id=dev_id, name=f"console{dev_id}", deviceTypeId="xboxConsole",
+                        pluginProps={"consoleId": console_id, "consoleName": "Living room Xbox"},
+                        states=states)
+    indigo.devices.add(dev)
+    return dev
+
+
+class _FakeAuth:
+    """Stand-in for XboxAuth: authorized, fixed header, counts invalidations."""
+
+    def __init__(self, header="XBL3.0 x=uhs;tok"):
+        self._header = header
+        self.invalidated = 0
+
+    def is_authorized(self):
+        return True
+
+    def xbl_header(self):
+        return self._header
+
+    def invalidate_xbl(self):
+        self.invalidated += 1
+
+    def state(self):
+        return xc.STATE_AUTHORIZED
+
+    def refresh_if_needed(self):
+        return False
+
+
+def setup_function(_func):
+    indigo.devices._devices.clear()   # pylint: disable=protected-access
+
+
+def _list_payload(console):
+    return {"result": [{"id": console.id, "name": console.name,
+                        "consoleType": console.console_type,
+                        "powerState": console.power_state,
+                        "remoteManagementEnabled": console.remote_management_enabled}],
+            "status": {"errorCode": "OK", "errorMessage": None}}
+
+
+# -- device lifecycle: consoles go in a SEPARATE registry ---------------------
+
+def test_device_start_routes_console_to_console_registry_not_tracked():
+    p = _plugin()
+    dev = _console_device(1, "C1")
+    p.deviceStartComm(dev)
+    assert p._consoles[dev.id] == "C1"
+    assert dev.id not in p._tracked
+
+
+def test_device_stop_removes_console_registration():
+    p = _plugin()
+    dev = _console_device(2, "C1")
+    p.deviceStartComm(dev)
+    p.deviceStopComm(dev)
+    assert dev.id not in p._consoles
+
+
+def test_comm_property_change_on_console_id():
+    p = _plugin()
+    old = indigo.Device(id=3, deviceTypeId="xboxConsole", pluginProps={"consoleId": "A"})
+    new = indigo.Device(id=3, deviceTypeId="xboxConsole", pluginProps={"consoleId": "B"})
+    assert p.didDeviceCommPropertyChange(old, new) is True
+    same = indigo.Device(id=3, deviceTypeId="xboxConsole", pluginProps={"consoleId": "A"})
+    assert p.didDeviceCommPropertyChange(old, same) is False
+
+
+def test_presence_device_start_still_routes_to_tracked_not_consoles():
+    """Regression guard: adding the console branch must not change the
+    existing xboxPresence routing."""
+    p = _plugin()
+    dev = indigo.Device(id=4, deviceTypeId="xboxPresence", pluginProps={"xuid": "X1"})
+    indigo.devices.add(dev)
+    p.deviceStartComm(dev)
+    assert p._tracked[dev.id] == "X1"
+    assert dev.id not in p._consoles
+
+
+# -- validateDeviceConfigUi ----------------------------------------------------
+
+def test_validate_console_config_requires_selection():
+    p = _plugin()
+    ok, _values, errors = p.validateDeviceConfigUi({"console": ""}, "xboxConsole", 0)
+    assert ok is False
+    assert "console" in errors
+
+
+def test_validate_console_config_stores_id_and_name():
+    p = _plugin()
+    p._last_consoles = [_console("C1", name="Kid's Xbox")]
+    ok, values = p.validateDeviceConfigUi({"console": "C1"}, "xboxConsole", 0)
+    assert ok is True
+    assert values["consoleId"] == "C1"
+    assert values["consoleName"] == "Kid's Xbox"
+
+
+# -- listConsoles ---------------------------------------------------------------
+
+def test_list_consoles_empty_without_auth(caplog):
+    p = _plugin()
+    p._auth = None
+    with caplog.at_level(logging.WARNING):
+        result = p.listConsoles()
+    assert result == []
+    assert any("authorize the plugin first" in r.getMessage() for r in caplog.records)
+
+
+def test_list_consoles_empty_auth_lost_mid_call_logs_warning(caplog):
+    """is_authorized() passes but the header is gone by the time fetch_consoles
+    actually runs (auth lost mid-call) — a distinct message from "never
+    authorized"."""
+    p = _plugin()
+    p._auth = _FakeAuth(header=None)     # xbl_header() -> None -> fetch_consoles -> None
+    p._api = FakeAPI()                   # never reached — fetch_consoles returns before HTTP
+    with caplog.at_level(logging.WARNING):
+        result = p.listConsoles()
+    assert result == []
+    assert any("authorization lost" in r.getMessage() for r in caplog.records)
+
+
+def test_list_consoles_empty_zero_consoles_logs_warning(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = FakeAPI().queue_get({"result": [], "status": {"errorCode": "OK"}})
+    with caplog.at_level(logging.WARNING):
+        result = p.listConsoles()
+    assert result == []
+    assert any("no consoles on this Xbox account" in r.getMessage() for r in caplog.records)
+
+
+def test_list_consoles_formats_name_and_type():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = FakeAPI().queue_get(_list_payload(_console("C1", name="Zed", console_type="XboxOne")))
+    options = p.listConsoles()
+    assert options == [("C1", "Zed (XboxOne)")]
+    assert p._last_consoles[0].id == "C1"
+
+
+def test_list_consoles_returns_empty_and_warns_on_error(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = FakeAPI().queue_get(oauth_error("boom", status=500))
+    with caplog.at_level(logging.WARNING):
+        options = p.listConsoles()
+    assert options == []
+    assert any("could not load console list" in r.getMessage() for r in caplog.records)
+
+
+def test_list_consoles_remote_management_disabled_logs_hint(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = FakeAPI().queue_get(
+        {"result": [], "status": {"errorCode": "RemoteManagementDisabled",
+                                  "errorMessage": "disabled"}})
+    with caplog.at_level(logging.WARNING):
+        options = p.listConsoles()
+    assert options == []
+    assert any("Remote features" in r.getMessage() for r in caplog.records)
+
+
+def test_list_consoles_catches_generic_exception(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+
+    class _BoomAPI:
+        def get_json(self, *a, **k):  # noqa: ARG002
+            raise RuntimeError("network exploded")
+    p._api = _BoomAPI()
+    with caplog.at_level(logging.ERROR):
+        options = p.listConsoles()      # must not raise
+    assert options == []
+    assert any("network exploded" in r.getMessage() or r.exc_info for r in caplog.records)
+
+
+# -- console poll: sync writes -------------------------------------------------
+
+def test_poll_writes_power_state_and_console_fields():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = FakeAPI().queue_get(_list_payload(console)).queue_get(
+        {"powerState": "On", "focusAppAumid": "", "status": {"errorCode": "OK"}})
+    dev = _console_device(10, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()
+    assert dev.states["powerState"] == "On"
+    assert dev.states["consoleName"] == "Living room Xbox"
+    assert dev.states["consoleType"] == "XboxSeriesS"
+    assert dev.states["onOffState"] is True
+    assert dev.states["lastPowerChange"]          # stamped on the first-ever poll
+    assert dev.states["lastPoll"]
+
+
+def test_poll_second_identical_poll_writes_no_batch_but_heartbeats():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="ConnectedStandby")
+    p._api = FakeAPI().queue_get(_list_payload(console)).queue_get(_list_payload(console))
+    dev = _console_device(11, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()
+    batches_after_first = len(dev.batches)
+    p._poll_consoles()
+    assert len(dev.batches) == batches_after_first     # change-only: no new batch
+    assert dev.states["lastPoll"]                       # heartbeat still written
+
+
+def test_poll_on_to_standby_transition_writes_off_and_power_change():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    on_console = _console("C1", power_state="On")
+    standby_console = _console("C1", power_state="ConnectedStandby")
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(on_console))
+             .queue_get({"powerState": "On", "focusAppAumid": "", "status": {"errorCode": "OK"}})
+             .queue_get(_list_payload(standby_console)))
+    dev = _console_device(12, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()
+    assert dev.states["onOffState"] is True
+    p._poll_consoles()          # standby: status endpoint must NOT be called (nothing queued)
+    assert dev.states["onOffState"] is False
+    assert dev.states["powerState"] == "ConnectedStandby"
+    assert dev.states["lastPowerChange"]
+    on_item = [i for i in dev.batches[-1] if i["key"] == "onOffState"][0]
+    assert on_item["uiValue"] == "Standby"
+
+
+def test_status_endpoint_not_called_when_standby():
+    """Fatal-if-touched: only the console-list call is queued, so a status
+    fetch for a standby console would raise IndexError on an empty deque."""
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="ConnectedStandby")
+    p._api = FakeAPI().queue_get(_list_payload(console))
+    dev = _console_device(13, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()             # must not raise — status never fetched
+    assert dev.states["onOffState"] is False
+    assert len(p._api.get_calls) == 1
+
+
+# -- focused title resolution + aumid cache ------------------------------------
+
+def _apps_payload():
+    return {"result": [
+        {"aumid": "GAME.Halo!App", "titleId": 111, "name": "Halo Infinite", "isGame": True},
+    ], "status": {"errorCode": "OK"}}
+
+
+def test_focused_title_resolved_via_installed_apps():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "GAME.Halo!App",
+                        "status": {"errorCode": "OK"}})
+             .queue_get(_apps_payload()))
+    dev = _console_device(20, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()
+    assert dev.states["focusedTitleName"] == "Halo Infinite"
+    assert dev.states["focusedTitleId"] == "111"
+    on_item = [i for i in dev.batches[-1] if i["key"] == "onOffState"][0]
+    assert on_item["uiValue"] == "Halo Infinite"
+
+
+def test_focused_title_blank_aumid_is_blank_no_installed_apps_call():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "", "status": {"errorCode": "OK"}}))
+    dev = _console_device(21, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()             # must not raise — no installedApps call queued
+    assert dev.states["focusedTitleName"] == ""
+    assert dev.states["focusedTitleId"] == ""
+    assert len(p._api.get_calls) == 2      # list + status only
+
+
+def test_aumid_cache_second_poll_same_aumid_makes_no_installed_apps_call():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "GAME.Halo!App",
+                        "status": {"errorCode": "OK"}})
+             .queue_get(_apps_payload())
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "GAME.Halo!App",
+                        "status": {"errorCode": "OK"}}))
+    dev = _console_device(22, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()
+    calls_after_first = len(p._api.get_calls)
+    p._poll_consoles()             # same aumid -> cached, no installedApps call queued/needed
+    assert len(p._api.get_calls) == calls_after_first + 2   # list + status only, no apps call
+    assert dev.states["focusedTitleName"] == "Halo Infinite"
+
+
+def test_title_change_while_on_refreshes_display_text():
+    """Still On, but the focused title changed: onOffState's uiValue must follow
+    the title even though neither onOffState nor powerState changed."""
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "", "status": {"errorCode": "OK"}})
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "GAME.Halo!App",
+                        "status": {"errorCode": "OK"}})
+             .queue_get(_apps_payload()))
+    dev = _console_device(23, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()             # On at the home menu
+    p._poll_consoles()             # same power state, game now focused
+    on_item = [i for i in dev.batches[-1] if i["key"] == "onOffState"][0]
+    assert on_item["value"] is True
+    assert on_item["uiValue"] == "Halo Infinite"
+
+
+def test_status_fetch_failure_keeps_power_update_and_leaves_focus_as_is():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    on_console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(on_console))
+             .queue_get(oauth_error("boom", status=500)))   # status fetch fails
+    dev = _console_device(25, "C1", states={"focusedTitleName": "Old Game",
+                                            "focusedTitleId": "999"})
+    p.deviceStartComm(dev)
+    p._poll_consoles()
+    assert dev.states["powerState"] == "On"       # power update NOT broken by the failure
+    assert dev.states["onOffState"] is True
+    assert dev.states["focusedTitleName"] == "Old Game"   # left exactly as it was
+    assert dev.states["focusedTitleId"] == "999"
+
+
+def test_installed_apps_failure_keeps_power_update_and_leaves_focus_as_is():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "GAME.New!App",
+                        "status": {"errorCode": "OK"}})
+             .queue_get(oauth_error("boom", status=500)))   # installedApps fetch fails
+    dev = _console_device(24, "C1", states={"focusedTitleName": "Old Game",
+                                            "focusedTitleId": "999"})
+    p.deviceStartComm(dev)
+    p._poll_consoles()
+    assert dev.states["powerState"] == "On"
+    assert dev.states["focusedTitleName"] == "Old Game"
+    assert dev.states["focusedTitleId"] == "999"
+
+
+# -- console missing from list / Unknown power state --------------------------
+
+def test_console_missing_from_list_sets_error_not_off():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = FakeAPI().queue_get({"result": [], "status": {"errorCode": "OK"}})
+    dev = _console_device(30, "MISSING-ID")
+    p.deviceStartComm(dev)
+    p._poll_consoles()
+    assert dev.error_state == "console not found"
+    assert "powerState" not in dev.states          # states untouched, not forced Off
+
+
+def test_console_unknown_power_state_sets_unavailable_error():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="Unknown")
+    p._api = FakeAPI().queue_get(_list_payload(console))
+    dev = _console_device(31, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()
+    assert dev.error_state == "unavailable"
+    assert "powerState" not in dev.states
+
+
+# -- console-list failure: error + backoff -------------------------------------
+
+def test_console_list_transport_failure_errors_device_keeps_last_state():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "", "status": {"errorCode": "OK"}})
+             .queue_get(oauth_error("boom", status=500)))
+    dev = _console_device(40, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()
+    assert dev.states["onOffState"] is True
+    p._poll_consoles()             # console-list call now fails
+    assert dev.states["onOffState"] is True        # last known state kept, not reset
+    assert dev.error_state == "console list unavailable"
+
+
+def test_console_list_failure_error_set_only_once_then_cleared_on_recovery():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(oauth_error("boom", status=500))
+             .queue_get(oauth_error("boom", status=500))
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "", "status": {"errorCode": "OK"}}))
+    dev = _console_device(41, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()
+    p._poll_consoles()
+    assert dev.error_calls == ["console list unavailable"]   # set once, not every poll
+    p._poll_consoles()             # recovers
+    assert dev.error_state is None
+
+
+def test_console_list_429_honours_retry_after():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = FakeAPI().queue_get(oauth_error("too_many", status=429, retry_after=45))
+    dev = _console_device(42, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()
+    assert p._console_backoff_until > 0
+    delay = p._console_poll_delay()
+    assert 44 <= delay <= 45.5
+
+
+def test_console_list_failure_backoff_is_exponential_and_capped():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = FakeAPI()
+    for _ in range(6):
+        p._api.queue_get(oauth_error("boom", status=500))
+    dev = _console_device(43, "C1")
+    p.deviceStartComm(dev)
+    delays = []
+    for _ in range(6):
+        p._poll_consoles()
+        delays.append(p._console_poll_delay())
+    # each failure's backoff should not decrease, and never exceed the cap
+    assert all(d <= plugin.CONSOLE_BACKOFF_MAX for d in delays)
+    assert delays[-1] == pytest.approx(plugin.CONSOLE_BACKOFF_MAX, abs=1)
+
+
+def test_console_list_failure_resets_backoff_and_failure_count_on_success():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(oauth_error("boom", status=500))
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "", "status": {"errorCode": "OK"}}))
+    dev = _console_device(44, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()
+    assert p._console_poll_failures == 1
+    p._poll_consoles()
+    assert p._console_poll_failures == 0
+    assert p._console_backoff_until == 0.0
+
+
+# -- no console devices: no API call at all ------------------------------------
+
+def test_poll_consoles_skips_entirely_with_no_console_devices():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = FakeAPI()          # nothing queued — any call would raise IndexError
+    p._poll_consoles()          # must not raise
+    assert p._api.get_calls == []
+
+
+# -- Status Request (actionControlUniversal) -----------------------------------
+
+class _Action:
+    def __init__(self, device_action):
+        self.deviceAction = device_action
+
+
+def test_status_request_polls_console_device_immediately():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = FakeAPI().queue_get(_list_payload(console)).queue_get(
+        {"powerState": "On", "focusAppAumid": "", "status": {"errorCode": "OK"}})
+    dev = _console_device(50, "C1")
+    p.deviceStartComm(dev)
+    p.actionControlUniversal(_Action(indigo.kUniversalAction.RequestStatus), dev)
+    assert dev.states["onOffState"] is True
+
+
+def test_status_request_for_presence_device_is_a_no_op():
+    p = _plugin()
+    dev = indigo.Device(id=51, deviceTypeId="xboxPresence", pluginProps={"xuid": "X1"})
+    indigo.devices.add(dev)
+    p.deviceStartComm(dev)
+    # No api/auth wired — must not raise or attempt any polling.
+    p.actionControlUniversal(_Action(indigo.kUniversalAction.RequestStatus), dev)
+
+
+# -- power on / off actions -----------------------------------------------------
+
+def test_power_on_sends_wake_up_and_pulls_poll_forward():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = FakeAPI().queue_post_json({"opId": "op1", "status": {"errorCode": "OK"}})
+    dev = _console_device(60, "C1")
+    p._next_console_due = 9999999999.0
+    p.powerOnConsole(_Action(None), dev)
+    call = p._api.post_json_calls[0]
+    assert call["payload"]["command"] == xc.POWER_COMMAND_WAKE_UP
+    assert call["payload"]["linkedXboxId"] == "C1"
+    assert p._next_console_due < 9999999999.0     # pulled forward
+
+
+def test_power_off_sends_turn_off():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = FakeAPI().queue_post_json({"opId": "op1", "status": {"errorCode": "OK"}})
+    dev = _console_device(61, "C1")
+    p.powerOffConsole(_Action(None), dev)
+    call = p._api.post_json_calls[0]
+    assert call["payload"]["command"] == xc.POWER_COMMAND_TURN_OFF
+
+
+def test_power_action_logs_error_on_failure_and_does_not_raise(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = FakeAPI().queue_post_json(oauth_error("boom", status=500))
+    dev = _console_device(62, "C1")
+    with caplog.at_level(logging.ERROR):
+        p.powerOnConsole(_Action(None), dev)      # must not raise
+    assert any("power on failed" in r.getMessage() for r in caplog.records)
+
+
+def test_power_action_without_console_id_logs_error_and_sends_nothing(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = FakeAPI()          # nothing queued — a send would raise IndexError
+    dev = indigo.Device(id=63, name="dev63", deviceTypeId="xboxConsole", pluginProps={})
+    with caplog.at_level(logging.ERROR):
+        p.powerOnConsole(_Action(None), dev)
+    assert p._api.post_json_calls == []
+    assert any("power on failed" in r.getMessage() for r in caplog.records)
+
+
+def test_power_action_without_device_logs_error_and_sends_nothing(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = FakeAPI()          # nothing queued — a send would raise IndexError
+    with caplog.at_level(logging.ERROR):
+        p.powerOnConsole(_Action(None), dev=None)
+    assert p._api.post_json_calls == []
+    assert any("no device selected" in r.getMessage() for r in caplog.records)
+
+
+def test_power_action_not_authorized_logs_error_and_sends_nothing(caplog):
+    p = _plugin()
+    p._auth = None       # not authorized
+    p._api = FakeAPI()   # nothing queued — a send would raise IndexError
+    dev = _console_device(64, "C1")
+    with caplog.at_level(logging.ERROR):
+        p.powerOnConsole(_Action(None), dev)
+    assert p._api.post_json_calls == []
+    assert any("not authorized" in r.getMessage() for r in caplog.records)
+
+
+def test_power_action_send_returns_none_logs_not_authorized_no_sent_no_pull_forward(caplog):
+    """``send_power_command`` returning ``None`` (no XBL header) must not be
+    mistaken for a successful send: no "sent" log line, and the next console
+    poll is not pulled forward."""
+    p = _plugin()
+    p._auth = _FakeAuth(header=None)     # xbl_header() -> None -> send returns None
+    p._api = FakeAPI()                   # nothing queued — send_power_command never
+                                          # reaches the HTTP layer when unauthorized
+    dev = _console_device(65, "C1")
+    p._next_console_due = 9999999999.0
+    with caplog.at_level(logging.INFO):    # INFO so a spurious "sent" line would be caught
+        p.powerOnConsole(_Action(None), dev)
+    assert p._api.post_json_calls == []
+    assert p._next_console_due == 9999999999.0     # NOT pulled forward
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("power on failed" in m and "not authorized" in m for m in messages)
+    assert not any("sent" in m for m in messages)
+
+
+# -- per-device isolation (item 1) ---------------------------------------------
+
+def test_poll_sync_failure_for_one_device_does_not_skip_another():
+    """An exception syncing device A (e.g. updateStatesOnServer raising) must
+    not stop device B from being synced, and must not escape _poll_consoles."""
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console_a = _console("A", power_state="On")
+    console_b = _console("B", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get({"result": [
+                 {"id": "A", "name": "A", "consoleType": "XboxOne", "powerState": "On"},
+                 {"id": "B", "name": "B", "consoleType": "XboxOne", "powerState": "On"}],
+                        "status": {"errorCode": "OK"}})
+             .queue_get({"powerState": "On", "focusAppAumid": "", "status": {"errorCode": "OK"}}))
+    dev_a = _console_device(100, "A")
+    dev_b = _console_device(101, "B")
+
+    def boom(_items):
+        raise RuntimeError("updateStatesOnServer exploded")
+    dev_a.updateStatesOnServer = boom
+
+    p.deviceStartComm(dev_a)
+    p.deviceStartComm(dev_b)
+    p._poll_consoles()             # must not raise
+    assert dev_b.states["powerState"] == "On"      # device B still synced
+
+
+def test_poll_device_lookup_keyerror_is_deleted_device_and_skipped(caplog):
+    """indigo.devices[dev_id] raising KeyError means the device was deleted —
+    skip quietly, no logged exception."""
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = FakeAPI().queue_get(_list_payload(console))
+    dev = _console_device(102, "C1")
+    p.deviceStartComm(dev)
+    indigo.devices._devices.pop(dev.id)     # pylint: disable=protected-access
+    with caplog.at_level(logging.ERROR):
+        p._poll_consoles()             # must not raise
+    assert not any(r.levelno >= logging.ERROR for r in caplog.records)
+
+
+def test_poll_device_lookup_non_keyerror_is_logged_not_swallowed(caplog):
+    """A non-KeyError from the devices lookup means the lookup itself broke,
+    not that the device is gone — it must be logged, not silently skipped."""
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = FakeAPI().queue_get(_list_payload(console))
+    dev = _console_device(103, "C1")
+    p.deviceStartComm(dev)
+
+    class _BrokenDevices:
+        def __getitem__(self, _dev_id):
+            raise RuntimeError("devices collection broke")
+    indigo.devices, real_devices = _BrokenDevices(), indigo.devices
+    try:
+        with caplog.at_level(logging.ERROR):
+            p._poll_consoles()         # must not raise
+    finally:
+        indigo.devices = real_devices
+    assert any("devices collection broke" in r.getMessage()
+              or r.exc_info for r in caplog.records)
+
+
+def test_handle_console_poll_failure_isolates_devices():
+    """Same per-device isolation for the console-list-failure error path."""
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = FakeAPI().queue_get(oauth_error("boom", status=500))
+    dev_a = _console_device(104, "A")
+    dev_b = _console_device(105, "B")
+
+    def boom(_message):
+        raise RuntimeError("setErrorStateOnServer exploded")
+    dev_a.setErrorStateOnServer = boom
+
+    p.deviceStartComm(dev_a)
+    p.deviceStartComm(dev_b)
+    p._poll_consoles()             # must not raise
+    assert dev_b.error_state == "console list unavailable"
+
+
+# -- generic (non-XboxError) failures route through the same failure path -----
+
+def test_fetch_consoles_generic_exception_routes_through_failure_path(caplog):
+    """A non-XboxError from fetch_consoles (e.g. a real bug, or a transport
+    error the api layer didn't wrap) must still back off and error the
+    devices, not silently vanish."""
+    p = _plugin()
+    p._auth = _FakeAuth()
+
+    class _BoomAPI:
+        def get_json(self, *a, **k):  # noqa: ARG002
+            raise RuntimeError("kaboom")
+    p._api = _BoomAPI()
+    dev = _console_device(160, "C1")
+    p.deviceStartComm(dev)
+    with caplog.at_level(logging.ERROR):
+        p._poll_consoles()             # must not raise
+    assert dev.error_state == "console list unavailable"
+    assert p._console_backoff_until > 0
+    failed = [r for r in caplog.records if "Xbox console poll failed" in r.getMessage()]
+    assert len(failed) == 1
+    assert failed[0].exc_info and failed[0].exc_info[0] is RuntimeError   # real traceback kept
+
+
+def test_auth_refresh_generic_exception_routes_through_failure_path():
+    p = _plugin()
+
+    class _BoomRefreshAuth(_FakeAuth):
+        def refresh_if_needed(self):
+            raise RuntimeError("refresh exploded")
+    p._auth = _BoomRefreshAuth()
+    p._api = _NeverTouchAPI()
+    dev = _console_device(161, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()                 # must not raise
+    assert dev.error_state == "console list unavailable"
+
+
+# -- auth loss (item 4) ---------------------------------------------------------
+
+class _NeverTouchAPI:
+    """A FakeAPI stand-in that raises if any method is called — proves the
+    auth-loss path never reaches the HTTP layer."""
+
+    def get_json(self, *a, **k):  # noqa: ARG002
+        raise AssertionError("API touched while not authorized")
+
+    def post_json(self, *a, **k):  # noqa: ARG002
+        raise AssertionError("API touched while not authorized")
+
+
+def test_poll_consoles_not_authorized_errors_every_device():
+    p = _plugin()
+
+    class _NotAuth(_FakeAuth):
+        def is_authorized(self):
+            return False
+    p._auth = _NotAuth()
+    p._api = _NeverTouchAPI()
+    dev1 = _console_device(110, "C1")
+    dev2 = _console_device(111, "C2")
+    p.deviceStartComm(dev1)
+    p.deviceStartComm(dev2)
+    p._poll_consoles()
+    assert dev1.error_state == "not authorized"
+    assert dev2.error_state == "not authorized"
+
+
+def test_poll_consoles_auth_required_errors_every_device():
+    p = _plugin()
+
+    class _AuthRequired(_FakeAuth):
+        def state(self):
+            return xc.STATE_AUTH_REQUIRED
+    p._auth = _AuthRequired()
+    p._api = _NeverTouchAPI()
+    dev = _console_device(112, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()
+    assert dev.error_state == "not authorized"
+
+
+def test_poll_consoles_fetch_returns_none_errors_every_device():
+    p = _plugin()
+    p._auth = _FakeAuth(header=None)      # xbl_header() -> None -> fetch_consoles -> None
+    p._api = _NeverTouchAPI()
+    dev = _console_device(113, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()
+    assert dev.error_state == "not authorized"
+
+
+def test_auth_loss_error_set_once_per_episode_then_updates_on_different_message():
+    p = _plugin()
+
+    class _NotAuth(_FakeAuth):
+        def is_authorized(self):
+            return False
+    p._auth = _NotAuth()
+    p._api = _NeverTouchAPI()
+    dev = _console_device(114, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()
+    p._poll_consoles()
+    assert dev.error_calls == ["not authorized"]      # not set again, same message
+
+
+# -- error message updates when it differs (item 10) ---------------------------
+
+def test_set_device_error_updates_when_message_differs():
+    p = _plugin()
+    dev = _console_device(120, "C1")
+    p._set_device_error(dev, "first")
+    p._set_device_error(dev, "first")      # same message: no-op
+    p._set_device_error(dev, "second")     # different message: updates
+    assert dev.error_calls == ["first", "second"]
+
+
+def test_console_list_recovery_after_logged_failure_logs_info_once(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(oauth_error("boom", status=500))
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "", "status": {"errorCode": "OK"}}))
+    dev = _console_device(121, "C1")
+    p.deviceStartComm(dev)
+    with caplog.at_level(logging.INFO):
+        p._poll_consoles()     # fails
+        p._poll_consoles()     # recovers
+    assert sum(1 for r in caplog.records
+              if r.getMessage() == "Xbox console poll recovered") == 1
+
+
+# -- log-once per episode: console-list failures (item 3 / item 11) ------------
+
+def test_console_list_failure_log_once_error_then_debug_then_recover_then_error(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(oauth_error("boom", status=500))
+             .queue_get(oauth_error("boom", status=500))
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "", "status": {"errorCode": "OK"}})
+             .queue_get(oauth_error("boom", status=500)))
+    dev = _console_device(122, "C1")
+    p.deviceStartComm(dev)
+    with caplog.at_level(logging.DEBUG):
+        p._poll_consoles()     # failure 1 -> ERROR
+        p._poll_consoles()     # failure 2 -> DEBUG
+        p._poll_consoles()     # recovers
+        p._poll_consoles()     # failure again -> ERROR (new episode)
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR
+             and "Xbox console poll failed" in r.getMessage()]
+    debugs = [r for r in caplog.records if r.levelno == logging.DEBUG
+             and "Xbox console poll still failing" in r.getMessage()]
+    assert len(errors) == 2
+    assert len(debugs) == 1
+    assert not any(r.exc_info for r in errors)   # HTTP failure: message only, no traceback
+
+
+def test_console_list_429_without_retry_after_uses_exponential_backoff():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = FakeAPI().queue_get(oauth_error("too_many", status=429, retry_after=None))
+    dev = _console_device(123, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()
+    delay = p._console_poll_delay()
+    assert delay == pytest.approx(plugin.CONSOLE_BACKOFF_BASE, abs=1)
+
+
+def test_console_list_429_warning_logged_once_then_debug(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = (FakeAPI()
+             .queue_get(oauth_error("too_many", status=429, retry_after=5))
+             .queue_get(oauth_error("too_many", status=429, retry_after=5)))
+    dev = _console_device(124, "C1")
+    p.deviceStartComm(dev)
+    with caplog.at_level(logging.DEBUG):
+        p._poll_consoles()
+        p._poll_consoles()
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING
+               and "rate-limited" in r.getMessage()]
+    debugs = [r for r in caplog.records if r.levelno == logging.DEBUG
+             and "rate-limited" in r.getMessage()]
+    assert len(warnings) == 1
+    assert len(debugs) == 1
+
+
+def test_console_list_failure_backoff_sequence():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = FakeAPI()
+    for _ in range(6):
+        p._api.queue_get(oauth_error("boom", status=500))
+    dev = _console_device(125, "C1")
+    p.deviceStartComm(dev)
+    delays = []
+    for _ in range(6):
+        p._poll_consoles()
+        delays.append(round(p._console_poll_delay()))
+    assert delays == [60, 120, 240, 480, 900, 900]
+
+
+# -- log-once per console: status / installedApps failures (item 9) -----------
+
+def test_status_fetch_failure_logs_warning_once_then_debug(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get(oauth_error("boom", status=500))
+             .queue_get(_list_payload(console))
+             .queue_get(oauth_error("boom", status=500)))
+    dev = _console_device(130, "C1")
+    p.deviceStartComm(dev)
+    with caplog.at_level(logging.DEBUG):
+        p._poll_consoles()
+        p._poll_consoles()
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING
+               and "status fetch failed" in r.getMessage()]
+    debugs = [r for r in caplog.records if r.levelno == logging.DEBUG
+             and "status fetch failed" in r.getMessage()]
+    assert len(warnings) == 1
+    assert len(debugs) == 1
+
+
+def test_status_fetch_recovery_resets_log_once(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get(oauth_error("boom", status=500))    # fails: WARNING
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "", "status": {"errorCode": "OK"}})
+             .queue_get(_list_payload(console))
+             .queue_get(oauth_error("boom", status=500)))   # fails again: WARNING (reset)
+    dev = _console_device(131, "C1")
+    p.deviceStartComm(dev)
+    with caplog.at_level(logging.DEBUG):
+        p._poll_consoles()
+        p._poll_consoles()     # recovers, clears the flag
+        p._poll_consoles()     # fails again -> WARNING, not DEBUG
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING
+               and "status fetch failed" in r.getMessage()]
+    assert len(warnings) == 2
+
+
+# -- installedApps None (not authorized) is a failure, not a miss (item 6) ----
+
+def test_resolve_focused_title_none_fetch_then_later_success_resolves():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "GAME.Halo!App",
+                        "status": {"errorCode": "OK"}}))
+    dev = _console_device(140, "C1", states={"focusedTitleName": "Old Game",
+                                             "focusedTitleId": "999"})
+    p.deviceStartComm(dev)
+
+    # First poll: installedApps fetch returns None (not authorized) — a
+    # failure, so the aumid must NOT be cached as a miss.
+    import xb_consoles as xbc
+    orig_fetch = xbc.fetch_installed_apps
+    xbc.fetch_installed_apps = lambda *a, **k: None
+    try:
+        p._poll_consoles()
+    finally:
+        xbc.fetch_installed_apps = orig_fetch
+    assert dev.states["focusedTitleName"] == "Old Game"    # left as-is
+    assert "GAME.Halo!App" not in p._console_apps.get("C1", {})
+
+    # Second poll: a real successful fetch must now resolve the same aumid.
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "GAME.Halo!App",
+                        "status": {"errorCode": "OK"}})
+             .queue_get(_apps_payload()))
+    p._poll_consoles()
+    assert dev.states["focusedTitleName"] == "Halo Infinite"
+
+
+def test_resolve_focused_title_error_code_body_not_cached_as_miss():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "GAME.Halo!App",
+                        "status": {"errorCode": "OK"}})
+             .queue_get({"result": [], "status": {"errorCode": "InvalidDeviceId",
+                                                  "errorMessage": "bad id"}}))
+    dev = _console_device(141, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()
+    assert "GAME.Halo!App" not in p._console_apps.get("C1", {})
+
+
+# -- deviceStopComm evicts the console-apps cache (item 6) --------------------
+
+def test_device_stop_comm_evicts_console_apps_cache():
+    p = _plugin()
+    dev = _console_device(170, "C1")
+    p.deviceStartComm(dev)
+    p._console_apps["C1"] = {"GAME.Halo!App": ("Halo Infinite", "111")}
+    p.deviceStopComm(dev)
+    assert "C1" not in p._console_apps
+
+
+# -- focusAppAumid absent (None) -> caller leaves focus states as-is (item 7) -
+
+def test_status_aumid_absent_leaves_focus_as_is():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "status": {"errorCode": "OK"}}))  # no focusAppAumid key
+    dev = _console_device(171, "C1", states={"focusedTitleName": "Old Game",
+                                             "focusedTitleId": "999"})
+    p.deviceStartComm(dev)
+    p._poll_consoles()             # must not raise — no installedApps call queued
+    assert dev.states["focusedTitleName"] == "Old Game"    # left exactly as-is
+    assert dev.states["focusedTitleId"] == "999"
+    assert len(p._api.get_calls) == 2      # list + status only
+
+
+# -- installedApps failure log-once per console (item 9) ----------------------
+
+def test_installed_apps_fetch_failure_logs_warning_once_then_debug(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "GAME.New!App",
+                        "status": {"errorCode": "OK"}})
+             .queue_get(oauth_error("boom", status=500))
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "GAME.New!App",
+                        "status": {"errorCode": "OK"}})
+             .queue_get(oauth_error("boom", status=500)))
+    dev = _console_device(172, "C1")
+    p.deviceStartComm(dev)
+    with caplog.at_level(logging.DEBUG):
+        p._poll_consoles()
+        p._poll_consoles()
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING
+               and "installed-apps fetch failed" in r.getMessage()]
+    debugs = [r for r in caplog.records if r.levelno == logging.DEBUG
+             and "installed-apps fetch failed" in r.getMessage()]
+    assert len(warnings) == 1
+    assert len(debugs) == 1
+
+
+# -- lastPowerChange not re-stamped on an unchanged second poll ----------------
+
+def test_last_power_change_not_restamped_on_unchanged_poll():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="ConnectedStandby")
+    p._api = FakeAPI().queue_get(_list_payload(console)).queue_get(_list_payload(console))
+    dev = _console_device(150, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()
+    first_change = dev.states["lastPowerChange"]
+    p._poll_consoles()             # power state unchanged
+    assert dev.states["lastPowerChange"] == first_change
+
+
+# -- per-device sync failure: error device, don't fake Off, log once (item 2) -
+
+def test_sync_failure_sets_state_update_error_and_logs_traceback_once(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "", "status": {"errorCode": "OK"}})
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "", "status": {"errorCode": "OK"}}))
+    dev = _console_device(204, "C1")
+
+    def boom(_items):
+        raise RuntimeError("updateStatesOnServer exploded")
+    dev.updateStatesOnServer = boom
+    p.deviceStartComm(dev)
+    with caplog.at_level(logging.DEBUG):
+        p._poll_consoles()             # must not raise
+        p._poll_consoles()
+    assert dev.error_state == "state update failed"
+    assert "powerState" not in dev.states          # sync never completed, never faked
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR
+             and "state update failed" in r.getMessage()]
+    debugs = [r for r in caplog.records if r.levelno == logging.DEBUG
+             and "state update" in r.getMessage()]
+    assert len(errors) == 1
+    assert errors[0].exc_info and errors[0].exc_info[0] is RuntimeError
+    assert len(debugs) == 1
+
+
+def test_sync_failure_clears_on_next_success():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "", "status": {"errorCode": "OK"}}))
+    dev = _console_device(205, "C1")
+    orig_update = dev.updateStatesOnServer
+    calls = {"n": 0}
+
+    def flaky(items):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom once")
+        orig_update(items)
+    dev.updateStatesOnServer = flaky
+    p.deviceStartComm(dev)
+    p._poll_consoles()                     # fails
+    assert dev.error_state == "state update failed"
+    assert p._console_sync_error_logged.get(dev.id) is True
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "", "status": {"errorCode": "OK"}}))
+    p._poll_consoles()                     # succeeds
+    assert dev.error_state is None
+    assert dev.id not in p._console_sync_error_logged
+
+
+# -- status fetch returning None mid-poll is a failure, not a clear (item 3) --
+
+def test_status_fetch_returns_none_is_a_failure_and_does_not_clear_flag(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = FakeAPI().queue_get(_list_payload(console))
+    dev = _console_device(206, "C1", states={"focusedTitleName": "Old Game",
+                                             "focusedTitleId": "999"})
+    p.deviceStartComm(dev)
+
+    import xb_consoles as xbc
+    orig = xbc.fetch_console_status
+    xbc.fetch_console_status = lambda *a, **k: None
+    try:
+        with caplog.at_level(logging.WARNING):
+            p._poll_consoles()
+    finally:
+        xbc.fetch_console_status = orig
+
+    assert dev.states["focusedTitleName"] == "Old Game"       # left as-is
+    assert p._console_detail_error_logged.get(("C1", "status")) is True   # NOT cleared
+    assert any("status fetch failed" in r.getMessage() and "not authorized" in r.getMessage()
+              for r in caplog.records)
+
+
+# -- unexpected (non-XboxError) status/installedApps failures (item 4) --------
+
+def test_status_fetch_unexpected_exception_logs_traceback_once_then_debug(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = FakeAPI().queue_get(_list_payload(console)).queue_get(_list_payload(console))
+    dev = _console_device(207, "C1")
+    p.deviceStartComm(dev)
+
+    import xb_consoles as xbc
+    orig = xbc.fetch_console_status
+
+    def boom(*a, **k):  # noqa: ARG001
+        raise RuntimeError("status boom")
+    xbc.fetch_console_status = boom
+    try:
+        with caplog.at_level(logging.DEBUG):
+            p._poll_consoles()
+            p._poll_consoles()
+    finally:
+        xbc.fetch_console_status = orig
+
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR
+             and "status fetch failed" in r.getMessage()]
+    debugs = [r for r in caplog.records if r.levelno == logging.DEBUG
+             and "status fetch failed" in r.getMessage()]
+    assert len(errors) == 1
+    assert errors[0].exc_info and errors[0].exc_info[0] is RuntimeError
+    assert len(debugs) == 1
+
+
+def test_installed_apps_fetch_unexpected_exception_logs_traceback_once(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "GAME.New!App",
+                        "status": {"errorCode": "OK"}}))
+    dev = _console_device(208, "C1")
+    p.deviceStartComm(dev)
+
+    import xb_consoles as xbc
+    orig = xbc.fetch_installed_apps
+
+    def boom(*a, **k):  # noqa: ARG001
+        raise RuntimeError("apps boom")
+    xbc.fetch_installed_apps = boom
+    try:
+        with caplog.at_level(logging.ERROR):
+            p._poll_consoles()
+    finally:
+        xbc.fetch_installed_apps = orig
+
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR
+             and "installed-apps fetch failed" in r.getMessage()]
+    assert len(errors) == 1
+    assert errors[0].exc_info and errors[0].exc_info[0] is RuntimeError
+
+
+# -- absent focusAppAumid: debug log once per console, not every poll (item 5) -
+
+def test_focus_aumid_absent_logs_debug_once_per_console(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "status": {"errorCode": "OK"}})   # no focusAppAumid
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "status": {"errorCode": "OK"}}))
+    dev = _console_device(209, "C1")
+    p.deviceStartComm(dev)
+    with caplog.at_level(logging.DEBUG):
+        p._poll_consoles()
+        p._poll_consoles()
+    debugs = [r for r in caplog.records if r.levelno == logging.DEBUG
+             and "absent from status" in r.getMessage()]
+    assert len(debugs) == 1
+
+
+# -- console not found: WARNING once per episode, names the device (item 6) ---
+
+def test_console_not_found_logs_warning_once_per_episode(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = (FakeAPI()
+             .queue_get({"result": [], "status": {"errorCode": "OK"}})
+             .queue_get({"result": [], "status": {"errorCode": "OK"}}))
+    dev = _console_device(210, "MISSING-ID")
+    p.deviceStartComm(dev)
+    with caplog.at_level(logging.WARNING):
+        p._poll_consoles()
+        p._poll_consoles()
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING
+               and "console not found" in r.getMessage()]
+    assert len(warnings) == 1          # same message both polls -> logged once
+    assert dev.name in warnings[0].getMessage()
+    assert dev.error_state == "console not found"
+
+
+# -- auth-lost episode reset so a later list failure logs ERROR again (item 7) -
+
+def test_set_console_devices_not_authorized_resets_list_failure_episode():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = FakeAPI().queue_get(oauth_error("boom", status=500))
+    dev = _console_device(211, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()                                 # list failure: episode started
+    assert p._console_poll_error_logged is True
+    assert p._console_poll_failures == 1
+
+    p._set_console_devices_not_authorized([dev.id])     # auth lost: reset the episode
+    assert p._console_poll_error_logged is False
+    assert p._console_poll_failures == 0
+
+
+# -- _set_console_devices_not_authorized isolation + non-KeyError (item 15) ---
+
+def test_set_console_devices_not_authorized_isolates_devices():
+    p = _plugin()
+    dev1 = _console_device(212, "C1")
+    dev2 = _console_device(213, "C2")
+
+    def boom(_message):
+        raise RuntimeError("setErrorStateOnServer exploded")
+    dev1.setErrorStateOnServer = boom
+    p.deviceStartComm(dev1)
+    p.deviceStartComm(dev2)
+    p._set_console_devices_not_authorized([dev1.id, dev2.id])   # must not raise
+    assert dev2.error_state == "not authorized"
+
+
+def test_set_console_devices_not_authorized_non_keyerror_lookup_logged(caplog):
+    p = _plugin()
+    dev = _console_device(214, "C1")
+    p.deviceStartComm(dev)
+
+    class _BrokenDevices:
+        def __getitem__(self, _dev_id):
+            raise RuntimeError("devices collection broke")
+    indigo.devices, real_devices = _BrokenDevices(), indigo.devices
+    try:
+        with caplog.at_level(logging.ERROR):
+            p._set_console_devices_not_authorized([dev.id])     # must not raise
+    finally:
+        indigo.devices = real_devices
+    assert any("devices collection broke" in r.getMessage() or r.exc_info
+              for r in caplog.records)
+
+
+# -- _handle_console_poll_failure non-KeyError lookup is logged (item 16) -----
+
+def test_handle_console_poll_failure_non_keyerror_lookup_logged(caplog):
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = FakeAPI().queue_get(oauth_error("boom", status=500))
+    dev = _console_device(215, "C1")
+    p.deviceStartComm(dev)
+
+    class _BrokenDevices:
+        def __getitem__(self, _dev_id):
+            raise RuntimeError("devices collection broke")
+    indigo.devices, real_devices = _BrokenDevices(), indigo.devices
+    try:
+        with caplog.at_level(logging.ERROR):
+            p._poll_consoles()             # must not raise
+    finally:
+        indigo.devices = real_devices
+    assert any("devices collection broke" in r.getMessage() or r.exc_info
+              for r in caplog.records)
+
+
+# -- pull-forward must not undercut an active backoff (item 9) ----------------
+
+def test_pull_console_poll_forward_does_not_undercut_active_backoff():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    p._api = FakeAPI().queue_get(oauth_error("too_many", status=429, retry_after=300))
+    dev = _console_device(216, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()                     # 429: backoff ~300s from now
+    backoff_end = p._console_backoff_until
+    assert backoff_end > 0
+    p._pull_console_poll_forward(plugin.CONSOLE_POWER_ACTION_FOLLOWUP_DELAY)   # a power action
+    assert p._next_console_due >= backoff_end
+
+
+# -- end-to-end: list failure -> auth lost -> recovery (item 17) --------------
+
+def test_end_to_end_list_failure_then_auth_lost_then_recovery():
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = FakeAPI().queue_get(oauth_error("boom", status=500))
+    dev = _console_device(217, "C1")
+    p.deviceStartComm(dev)
+
+    p._poll_consoles()
+    assert dev.error_state == "console list unavailable"
+
+    class _NotAuth(_FakeAuth):
+        def is_authorized(self):
+            return False
+    p._auth = _NotAuth()
+    p._api = _NeverTouchAPI()
+    p._poll_consoles()
+    assert dev.error_state == "not authorized"
+
+    p._auth = _FakeAuth()
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "", "status": {"errorCode": "OK"}}))
+    p._poll_consoles()
+    assert dev.error_state is None

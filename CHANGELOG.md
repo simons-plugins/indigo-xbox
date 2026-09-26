@@ -2,6 +2,55 @@
 
 All notable changes to the Xbox plugin are documented here.
 
+## 2026.2.0 — Xbox Console device
+
+### Added
+- `xboxConsole` sensor device: reports whether an Xbox **console** (not a
+  gamertag) is powered on, via the SmartGlass console-management API (xccs).
+  Uses the existing XBL3.0 auth chain — no separate sign-in. States:
+  `powerState`, `consoleName`, `consoleType`, `focusedTitleName`,
+  `focusedTitleId`, `lastPoll`, `lastPowerChange`; `onOffState` is true only
+  when `powerState` is exactly `"On"` — a controller power-off (Sleep/Standby
+  mode) reports `ConnectedStandby`, which reads as **off**, not just "not on".
+- **Power On** / **Power Off** actions (`deviceFilter="self.xboxConsole"`)
+  send a SmartGlass `WakeUp`/`TurnOff` command to the device's console. Power
+  On requires the console's power mode to be Sleep/Standby (Full shutdown
+  cannot be woken remotely). A successful command pulls the next console poll
+  ~10 s forward so the state catches up without polling on every action.
+- Status Request triggers an immediate console poll for `xboxConsole`
+  devices (`actionControlUniversal` / `kUniversalAction.RequestStatus`).
+- New `consolePollInterval` preference (default 60, 15–600 s, same
+  validation as `pollInterval`) — console devices are polled on their own
+  schedule, independent of presence, and are skipped entirely (no API call)
+  while no console device is configured.
+- Focused-title resolution: while a console is On, one `/consoles/{id}` call
+  reads `focusAppAumid`, resolved to a title name/id via a per-console,
+  per-aumid cached `installedApps` lookup (a miss is cached too, so an
+  unmatched aumid never re-fetches every poll).
+- Degradation paths: a console-list failure (transport, 401-after-retry,
+  429, 5xx, bad JSON, or a list-level `errorCode`) sets one error per
+  console device and backs off (429 honours `retry_after`; otherwise
+  exponential from 60 s to a 900 s cap, reset on recovery) — last known
+  states are always left untouched, never reset to Off. A console missing
+  from a successful list, or reporting `Unknown`/a missing `powerState`, is
+  reported as "unavailable"/"console not found", not Off. A `/consoles/{id}`
+  or `installedApps` failure never breaks the power-state update — only the
+  focused-title states are left as they were. Losing authorization mid-run
+  (revoked/expired, or a Status Request/poll with no XBL header) now also
+  errors every configured console device as "not authorized" instead of
+  going quiet, and a recovered console-list poll after a logged failure logs
+  one "Xbox console poll recovered" line. A device stuck on one error message
+  now updates immediately when a *different* failure supersedes it (e.g.
+  "console list unavailable" → "not authorized"), instead of being stuck
+  showing the first message for the whole episode. `listConsoles`'s dialog
+  picker now hints to check Settings → Devices & connections → Remote
+  features when the console list fails with `RemoteManagementDisabled`.
+  `listConsoles` now logs a distinct warning for each reason its picker
+  comes back empty (not authorized, authorization lost mid-call, or
+  genuinely zero consoles on the account), and a console missing from the
+  account now also logs one "console not found" warning per episode naming
+  the device.
+
 ## 2026.1.0 — Usage charts
 
 ### Added

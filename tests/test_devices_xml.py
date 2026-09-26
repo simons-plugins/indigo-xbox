@@ -21,33 +21,44 @@ EXPECTED_STATES = {"online", "presenceState", "titleName", "titleId",
                    # title box art
                    "titleImageUrl"}
 
+EXPECTED_CONSOLE_STATES = {"powerState", "consoleName", "consoleType",
+                           "focusedTitleName", "focusedTitleId", "lastPoll",
+                           "lastPowerChange"}
+
 
 def _root(path):
     return ET.parse(path).getroot()
+
+
+def _device(device_id):
+    for dev in _root(DEVICES_XML).findall("Device"):
+        if dev.get("id") == device_id:
+            return dev
+    raise AssertionError(f"no Device id={device_id!r} in Devices.xml")
 
 
 def test_devices_xml_parses():
     assert _root(DEVICES_XML).tag == "Devices"
 
 
-def test_single_sensor_device_type():
+def test_two_sensor_device_types():
     devices = _root(DEVICES_XML).findall("Device")
-    assert len(devices) == 1
-    dev = devices[0]
-    assert dev.get("id") == "xboxPresence"
-    assert dev.get("type") == "sensor"
+    assert len(devices) == 2
+    assert {d.get("id") for d in devices} == {"xboxPresence", "xboxConsole"}
+    assert all(d.get("type") == "sensor" for d in devices)
 
 
 def test_supports_on_state_prop_present():
-    dev = _root(DEVICES_XML).find("Device")
-    fields = {f.get("id") for f in dev.findall("ConfigUI/Field")}
-    assert "SupportsOnState" in fields
-    on_field = dev.find("ConfigUI/Field[@id='SupportsOnState']")
-    assert on_field.get("defaultValue") == "true"
+    for device_id in ("xboxPresence", "xboxConsole"):
+        dev = _device(device_id)
+        fields = {f.get("id") for f in dev.findall("ConfigUI/Field")}
+        assert "SupportsOnState" in fields
+        on_field = dev.find("ConfigUI/Field[@id='SupportsOnState']")
+        assert on_field.get("defaultValue") == "true"
 
 
 def test_config_ui_has_person_and_manual_fields():
-    dev = _root(DEVICES_XML).find("Device")
+    dev = _device("xboxPresence")
     fields = {f.get("id") for f in dev.findall("ConfigUI/Field")}
     assert "person" in fields
     assert "manualXuid" in fields
@@ -55,19 +66,35 @@ def test_config_ui_has_person_and_manual_fields():
     assert person.find("List").get("method") == "listPeople"
 
 
+def test_config_ui_has_console_field():
+    dev = _device("xboxConsole")
+    fields = {f.get("id") for f in dev.findall("ConfigUI/Field")}
+    assert "console" in fields
+    console = dev.find("ConfigUI/Field[@id='console']")
+    assert console.find("List").get("method") == "listConsoles"
+
+
 def test_expected_states_present_and_unique():
-    dev = _root(DEVICES_XML).find("Device")
+    dev = _device("xboxPresence")
     ids = [s.get("id") for s in dev.findall("States/State")]
     assert len(ids) == len(set(ids))                      # unique
     assert set(ids) == EXPECTED_STATES
 
 
+def test_expected_console_states_present_and_unique():
+    dev = _device("xboxConsole")
+    ids = [s.get("id") for s in dev.findall("States/State")]
+    assert len(ids) == len(set(ids))                      # unique
+    assert set(ids) == EXPECTED_CONSOLE_STATES
+
+
 def test_state_ids_are_valid_identifiers():
-    dev = _root(DEVICES_XML).find("Device")
-    for state in dev.findall("States/State"):
-        sid = state.get("id")
-        assert sid and sid[0].isascii() and sid[0].isalpha(), sid
-        assert all(ch.isascii() and ch.isalnum() for ch in sid), sid
+    for device_id in ("xboxPresence", "xboxConsole"):
+        dev = _device(device_id)
+        for state in dev.findall("States/State"):
+            sid = state.get("id")
+            assert sid and sid[0].isascii() and sid[0].isalpha(), sid
+            assert all(ch.isascii() and ch.isalnum() for ch in sid), sid
 
 
 def test_plugin_config_has_client_and_auth_fields():
