@@ -1,0 +1,19 @@
+{
+  "result": [
+    {
+      "id": "CONSOLE_ID_1",
+      "name": "Living room Xbox",
+      "locale": "en-GB",
+      "region": "GB",
+      "consoleType": "XboxSeriesS",
+      "powerState": "On",
+      "digitalAssistantRemoteControlEnabled": false,
+      "remoteManagementEnabled": true,
+      "consoleStreamingEnabled": true,
+      "wirelessWarning": false,
+      "outOfHomeWarning": false
+    }
+  ],
+  "agentUserId": "",
+  "status": {"errorCode": "OK", "errorMessage": null}
+}

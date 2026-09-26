@@ -1,0 +1,16 @@
+{
+  "id": "CONSOLE_ID_1",
+  "name": "Living room Xbox",
+  "locale": "en-GB",
+  "region": "GB",
+  "consoleType": "XboxSeriesS",
+  "powerState": "On",
+  "playbackState": "Stopped",
+  "loginState": null,
+  "focusAppAumid": "",
+  "isTvConfigured": false,
+  "digitalAssistantRemoteControlEnabled": false,
+  "consoleStreamingEnabled": true,
+  "remoteManagementEnabled": true,
+  "status": {"errorCode": "OK", "errorMessage": null}
+}
