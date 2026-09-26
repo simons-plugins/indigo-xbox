@@ -180,6 +180,28 @@ def test_error_state_set_only_once():
     assert dev.error_calls == ["gamertag not visible on this account"]
 
 
+def test_sync_all_lookup_keyerror_skips_quietly_other_error_is_logged(caplog):
+    """KeyError = device deleted (skip quietly); anything else = the lookup
+    itself broke — logged, never silently swallowed."""
+    p = _plugin()
+    p._tracked = {101: "X1", 102: "X2"}
+
+    class _Devices:
+        def __getitem__(self, dev_id):
+            if dev_id == 101:
+                raise KeyError(dev_id)
+            raise RuntimeError("devices collection broke")
+    indigo.devices, real_devices = _Devices(), indigo.devices
+    try:
+        with caplog.at_level(logging.DEBUG):
+            p._sync_all([_presence("X1"), _presence("X2")])   # must not raise
+    finally:
+        indigo.devices = real_devices
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert len(errors) == 1
+    assert "devices collection broke" in str(errors[0].exc_info[1])
+
+
 # -- ConfigUI -----------------------------------------------------------------
 
 def test_list_people_from_last_poll():
