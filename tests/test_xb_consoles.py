@@ -160,6 +160,13 @@ def test_parse_installed_apps_explicit_empty_result_is_empty():
                                              "status": {"errorCode": "OK"}}) == []
 
 
+def test_parse_installed_apps_non_dict_payload_raises():
+    with pytest.raises(XboxError):
+        xb_consoles.parse_installed_apps(["not", "a", "dict"])
+    with pytest.raises(XboxError):
+        xb_consoles.parse_installed_apps("also not a dict")
+
+
 def test_parse_installed_apps_missing_result_raises():
     """A missing/malformed ``result`` is a failed call, not "no apps installed"
     — the caller (``_resolve_focused_title``) must treat it as a failure and
@@ -306,6 +313,15 @@ def test_send_power_command_retries_once_on_401():
     result = xb_consoles.send_power_command(api, auth, "C1", xc.POWER_COMMAND_TURN_OFF, "sess")
     assert result["opId"] == "op1"
     assert auth.invalidated == 1
+
+
+def test_send_power_command_non_dict_response_raises():
+    """A JSON ``null`` body (present header, unexpected response shape) must
+    raise, not be mistaken for the "no auth header" ``None`` sentinel."""
+    api = FakeAPI().queue_post_json(None)
+    with pytest.raises(XboxError) as excinfo:
+        xb_consoles.send_power_command(api, _Auth(), "C1", xc.POWER_COMMAND_WAKE_UP, "sess")
+    assert "unexpected power command response" in str(excinfo.value)
 
 
 def test_send_power_command_raises_on_error_code():

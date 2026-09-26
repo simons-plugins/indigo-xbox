@@ -9,6 +9,8 @@ advance ``plugin.time.time`` and raise ``p.StopThread`` once the simulated
 run has gone on long enough) rather than real time — these tests take
 microseconds, not seconds.
 """
+import logging
+
 import plugin
 
 
@@ -45,15 +47,16 @@ def test_presence_polls_exactly_at_expected_ticks_despite_short_slices(monkeypat
     p = _plugin()
     clock = _fake_clock(monkeypatch)
     supervise_calls = []
+    console_calls = []
     monkeypatch.setattr(p, "_supervise", lambda: supervise_calls.append(clock["t"]))
-    monkeypatch.setattr(p, "_poll_consoles", lambda: (_ for _ in ()).throw(
-        AssertionError("_poll_consoles must not be called — no console devices")))
+    monkeypatch.setattr(p, "_poll_consoles", lambda: console_calls.append(clock["t"]))
     p._poll_interval = 60
     sleeps = _fake_sleep(p, clock, stop_after=130)
 
     p.runConcurrentThread()
 
     assert supervise_calls == [0.0, 60.0, 120.0]
+    assert console_calls == []             # no console devices configured — never called
     assert all(s <= plugin.MAX_SLEEP_SLICE for s in sleeps)
 
 
@@ -62,14 +65,15 @@ def test_presence_polls_exactly_at_expected_ticks_despite_short_slices(monkeypat
 def test_no_console_devices_never_polls_consoles(monkeypatch):
     p = _plugin()
     clock = _fake_clock(monkeypatch)
+    console_calls = []
     monkeypatch.setattr(p, "_supervise", lambda: None)
-    monkeypatch.setattr(p, "_poll_consoles", lambda: (_ for _ in ()).throw(
-        AssertionError("_poll_consoles must not be called — no console devices")))
+    monkeypatch.setattr(p, "_poll_consoles", lambda: console_calls.append(clock["t"]))
     p._poll_interval = 60
     sleeps = _fake_sleep(p, clock, stop_after=200)
 
-    p.runConcurrentThread()          # must not raise the AssertionError above
+    p.runConcurrentThread()
 
+    assert console_calls == []
     assert all(s <= plugin.MAX_SLEEP_SLICE for s in sleeps)
 
 
@@ -148,7 +152,7 @@ def test_pull_forward_during_poll_is_not_overwritten(monkeypatch):
 
 # -- (f) an exception from _poll_consoles never escapes, and due advances -----
 
-def test_poll_consoles_exception_does_not_escape_and_due_advances(monkeypatch):
+def test_poll_consoles_exception_does_not_escape_and_due_advances(monkeypatch, caplog):
     p = _plugin()
     clock = _fake_clock(monkeypatch)
 
@@ -161,6 +165,11 @@ def test_poll_consoles_exception_does_not_escape_and_due_advances(monkeypatch):
     p._consoles = {1: "C1"}
     _fake_sleep(p, clock, stop_after=4)
 
-    p.runConcurrentThread()            # must not raise RuntimeError
+    with caplog.at_level(logging.ERROR):
+        p.runConcurrentThread()        # must not raise RuntimeError
 
     assert p._next_console_due == 60.0     # due still advanced despite the exception
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR
+             and "boom" in r.getMessage()]
+    assert len(errors) == 1
+    assert errors[0].exc_info and errors[0].exc_info[0] is RuntimeError
