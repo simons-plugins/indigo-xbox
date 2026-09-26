@@ -146,11 +146,13 @@ def parse_console_status(payload):
 def parse_installed_apps(payload):
     """Parse a ``GET /lists/installedApps`` response into a list of
     :class:`InstalledApp`. Raises :class:`XboxError` when the response's own
-    ``status.errorCode`` is not ``"OK"``, or when ``result`` is
-    missing/not a list — those are failed calls, not "no apps installed".
-    Only an explicit empty ``result`` list yields ``[]``."""
+    ``status.errorCode`` is not ``"OK"``, when the payload is not a dict, or
+    when ``result`` is missing/not a list — those are failed calls, not "no
+    apps installed". Only an explicit empty ``result`` list yields ``[]``."""
+    if not isinstance(payload, dict):
+        raise XboxError("xccs installed apps error: invalid response")
     _check_status(payload, "installed apps")
-    result = (payload or {}).get("result")
+    result = payload.get("result")
     if not isinstance(result, list):
         raise XboxError("xccs installed apps error: missing result")
     apps = []
@@ -260,8 +262,10 @@ def _get_installed_apps(api, header, console_id):
 def send_power_command(api, auth, console_id, command, session_id, logger=None):
     """Send a ``Power`` command (``WakeUp``/``TurnOff``) to ``console_id``.
     Returns the parsed response dict, or ``None`` when not authorized. Same
-    one-shot 401 retry; raises :class:`XboxError` on an HTTP failure or a
-    non-``"OK"`` ``status.errorCode`` in the response body."""
+    one-shot 401 retry; raises :class:`XboxError` on an HTTP failure, a
+    non-``"OK"`` ``status.errorCode`` in the response body, or a response
+    that isn't a dict at all (e.g. JSON ``null``) — ``None`` must keep
+    meaning only "no auth header", never "unexpected body"."""
     logger = logger or logging.getLogger("xb_consoles")
     header = auth.xbl_header()
     if not header:
@@ -286,6 +290,8 @@ def send_power_command(api, auth, console_id, command, session_id, logger=None):
         if not header:
             return None
         data = _post_power_command(api, header, payload)
+    if not isinstance(data, dict):
+        raise XboxError("unexpected power command response")
     _check_status(data, "power command")
     return data
 

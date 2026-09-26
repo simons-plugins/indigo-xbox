@@ -45,6 +45,11 @@ All notable changes to the Xbox plugin are documented here.
   showing the first message for the whole episode. `listConsoles`'s dialog
   picker now hints to check Settings → Devices & connections → Remote
   features when the console list fails with `RemoteManagementDisabled`.
+  `listConsoles` now logs a distinct warning for each reason its picker
+  comes back empty (not authorized, authorization lost mid-call, or
+  genuinely zero consoles on the account), and a console missing from the
+  account now also logs one "console not found" warning per episode naming
+  the device.
 
 ## 2026.1.0 — Usage charts
 

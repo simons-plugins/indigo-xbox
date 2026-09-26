@@ -114,6 +114,14 @@ class Plugin(indigo.PluginBase):
         # per-console status/installedApps failure log-once (kind is
         # "status" or "installed apps"; reset to "not logged" on success).
         self._console_detail_error_logged = {}
+        # console_id -> already logged this episode, for the "focusAppAumid
+        # absent from status" debug log-once (reset once a real aumid, blank
+        # or non-blank, is seen again).
+        self._console_focus_unknown_logged = set()
+        # dev.id -> already logged this episode, for the per-device
+        # state-write failure traceback log-once (reset on the next
+        # successful sync).
+        self._console_sync_error_logged = {}
         # One session id per plugin run, reused for every power command sent
         # this run (per the xccs /commands contract).
         self._session_id = str(uuid.uuid4())
@@ -366,21 +374,45 @@ class Plugin(indigo.PluginBase):
             try:
                 console = by_id.get(console_id)
                 if console is None:
-                    self._set_device_error(dev, "console not found")
+                    changed = self._set_device_error(dev, "console not found")
+                    if changed:
+                        self.logger.warning(
+                            "Xbox console '%s': console not found on this account (id=%s) — "
+                            "the console may have been removed from the account, or this "
+                            "device's console id may be stale; reconfigure the device to pick "
+                            "a current console.", dev.name, console_id)
                     continue
                 if xb_consoles.display_text(console.power_state) is None:
                     self._set_device_error(dev, "unavailable")
                     continue
+                # Sync FIRST: only clear the device error once the write
+                # actually succeeds, so a sync failure never masquerades as
+                # a healthy device (and never gets faked to Off).
+                try:
+                    self._sync_console_device(dev, console, now_iso)
+                except Exception as exc:  # pylint: disable=broad-except
+                    self._set_device_error(dev, "state update failed")
+                    self._log_console_sync_failure_once(dev, exc)
+                    continue
                 self._clear_error(dev)
-                self._sync_console_device(dev, console, now_iso)
+                self._clear_console_sync_failure(dev.id)
             except Exception as exc:  # pylint: disable=broad-except
-                # A failure syncing THIS device must not stop the others.
+                # A failure handling THIS device must not stop the others.
                 self.logger.exception(exc)
 
     def _set_console_devices_not_authorized(self, dev_ids):
         """Auth was lost (not authorized / re-authorization required / no
         header) between polls: error every configured console device once
-        per episode, states left exactly as they were — never an API call."""
+        per episode, states left exactly as they were — never an API call.
+
+        Also resets the console-LIST failure episode: once auth is lost, a
+        list call is never attempted, so a later list failure (after
+        re-authorizing) is a fresh episode and must log at ERROR again, not
+        be swallowed by a stale "already logged" flag from before auth was
+        lost."""
+        with self._dev_lock:
+            self._console_poll_error_logged = False
+            self._console_poll_failures = 0
         for dev_id in dev_ids:
             try:
                 dev = indigo.devices[dev_id]
@@ -405,10 +437,14 @@ class Plugin(indigo.PluginBase):
         the state catches up without polling every action. An overdue due
         time (a poll is running or about to) is replaced too: otherwise a
         command sent mid-poll is lost when the loop reschedules at
-        now + interval (runConcurrentThread keeps the earlier of the two)."""
+        now + interval (runConcurrentThread keeps the earlier of the two).
+
+        Never undercuts an active backoff: a power action doesn't fix
+        whatever made the list call start failing, so the earliest this can
+        pull the poll to is the backoff's own end."""
         with self._dev_lock:
             now = time.time()
-            target = now + delay
+            target = max(now + delay, self._console_backoff_until)
             if target < self._next_console_due or self._next_console_due <= now:
                 self._next_console_due = target
 
@@ -490,24 +526,42 @@ class Plugin(indigo.PluginBase):
             try:
                 status = xb_consoles.fetch_console_status(self._api, self._auth, console.id,
                                                            logger=self.logger)
-            except Exception as exc:  # pylint: disable=broad-except
+            except XboxError as exc:
                 self._log_console_detail_failure_once(
                     console.id, "status",
                     f"Xbox console status fetch failed for '{dev.name}' (states left "
                     f"as-is): {exc}")
                 status = None
+            except Exception as exc:  # pylint: disable=broad-except
+                # Not an XboxError: a bug in our own code, not a normal API
+                # failure — worth a traceback the first time.
+                self._log_console_detail_failure_once(
+                    console.id, "status",
+                    f"Xbox console status fetch failed for '{dev.name}' (unexpected "
+                    f"{type(exc).__name__}; states left as-is): {exc}", unexpected=True)
+                status = None
             else:
-                self._clear_console_detail_failure(console.id, "status")
+                if status is None:
+                    # Auth lost mid-poll — a failure, not a clean "nothing to
+                    # report"; the flag must NOT be cleared.
+                    self._log_console_detail_failure_once(
+                        console.id, "status",
+                        f"Xbox console status fetch failed for '{dev.name}' (not authorized; "
+                        f"states left as-is)")
+                else:
+                    self._clear_console_detail_failure(console.id, "status")
             if status is not None:
                 aumid = status.focus_app_aumid
                 if aumid is None:
-                    pass                                 # unknown focus — leave as-is
+                    self._log_focus_unknown_once(dev, console.id)
                 elif aumid:
+                    self._clear_focus_unknown(console.id)
                     resolved = self._resolve_focused_title(console.id, aumid)
                     if resolved is not None:
                         focus_name, focus_id = resolved
                     # else: installedApps fetch failed — leave as-is (see below)
                 else:
+                    self._clear_focus_unknown(console.id)
                     focus_name, focus_id = "", ""       # at the home menu / dashboard
             # else: status fetch failed — leave focus_name/focus_id as-is
         else:
@@ -554,11 +608,17 @@ class Plugin(indigo.PluginBase):
         try:
             apps = xb_consoles.fetch_installed_apps(self._api, self._auth, console_id,
                                                     logger=self.logger)
-        except Exception as exc:  # pylint: disable=broad-except
+        except XboxError as exc:
             self._log_console_detail_failure_once(
                 console_id, "installed apps",
                 f"Xbox installed-apps fetch failed for console {console_id} (states left "
                 f"as-is): {exc}")
+            return None
+        except Exception as exc:  # pylint: disable=broad-except
+            self._log_console_detail_failure_once(
+                console_id, "installed apps",
+                f"Xbox installed-apps fetch failed for console {console_id} (unexpected "
+                f"{type(exc).__name__}; states left as-is): {exc}", unexpected=True)
             return None
         if apps is None:
             self._log_console_detail_failure_once(
@@ -574,18 +634,57 @@ class Plugin(indigo.PluginBase):
             cache[aumid] = None            # cache the miss too — app list was real
         return cache[aumid] or ("", "")
 
-    def _log_console_detail_failure_once(self, console_id, kind, message):
+    def _log_console_detail_failure_once(self, console_id, kind, message, unexpected=False):
         """Warn once per console per failure episode for a status/installed
         apps fetch failure (reset on the next success), debug thereafter —
-        same shape as _log_console_failure_once for the console-list call."""
+        same shape as _log_console_failure_once for the console-list call.
+        ``unexpected=True`` (a non-XboxError — a bug, not a normal API
+        failure) logs with a traceback the first time."""
         key = (console_id, kind)
         with self._dev_lock:
             already = self._console_detail_error_logged.get(key, False)
             self._console_detail_error_logged[key] = True
         if already:
             self.logger.debug(message)
+        elif unexpected:
+            self.logger.error(message, exc_info=True)
         else:
             self.logger.warning(message)
+
+    def _log_focus_unknown_once(self, dev, console_id):
+        """Debug-log once per console per episode when a status response is
+        missing ``focusAppAumid`` entirely (unknown focus — states left
+        as-is), so this doesn't spam every poll for a console that never
+        reports it."""
+        with self._dev_lock:
+            already = console_id in self._console_focus_unknown_logged
+            self._console_focus_unknown_logged.add(console_id)
+        if not already:
+            self.logger.debug(
+                "Xbox console '%s': focusAppAumid absent from status (leaving focused "
+                "title as-is)", dev.name)
+
+    def _clear_focus_unknown(self, console_id):
+        with self._dev_lock:
+            self._console_focus_unknown_logged.discard(console_id)
+
+    def _log_console_sync_failure_once(self, dev, exc):
+        """Error-log (with traceback) once per device per failure episode
+        when writing a console device's states fails, debug thereafter —
+        same shape as _log_console_detail_failure_once, keyed by device id."""
+        with self._dev_lock:
+            already = self._console_sync_error_logged.get(dev.id, False)
+            self._console_sync_error_logged[dev.id] = True
+        if already:
+            self.logger.debug("Xbox console '%s': state update still failing: %s",
+                              dev.name, exc, exc_info=True)
+        else:
+            self.logger.error("Xbox console '%s': state update failed: %s", dev.name, exc,
+                              exc_info=True)
+
+    def _clear_console_sync_failure(self, dev_id):
+        with self._dev_lock:
+            self._console_sync_error_logged.pop(dev_id, None)
 
     def _clear_console_detail_failure(self, console_id, kind):
         with self._dev_lock:
@@ -769,8 +868,11 @@ class Plugin(indigo.PluginBase):
         for dev_id, xuid in tracked.items():
             try:
                 dev = indigo.devices[dev_id]
-            except Exception:  # pylint: disable=broad-except
+            except KeyError:
                 continue                  # device deleted between poll and lookup
+            except Exception as exc:  # pylint: disable=broad-except
+                self.logger.exception(exc)      # lookup itself broke, not "gone"
+                continue
             presence = by_xuid.get(xuid)
             if presence is None:
                 self._mark_unknown(dev)
@@ -807,6 +909,7 @@ class Plugin(indigo.PluginBase):
                 self._errored[dev.id] = message
         if changed:
             dev.setErrorStateOnServer(message)
+        return changed
 
     def _clear_error(self, dev):
         with self._dev_lock:
@@ -913,6 +1016,7 @@ class Plugin(indigo.PluginBase):
         "last poll" to fall back on while no console device is configured
         yet — consoles are never polled until one exists)."""
         if not (self._auth and self._auth.is_authorized()):
+            self.logger.warning("Xbox: not authorized — authorize the plugin first.")
             return []
         try:
             consoles = xb_consoles.fetch_consoles(self._api, self._auth, logger=self.logger)
@@ -925,7 +1029,15 @@ class Plugin(indigo.PluginBase):
         except Exception as exc:  # pylint: disable=broad-except
             self.logger.exception(exc)
             return []
+        if consoles is None:
+            # is_authorized() passed above but the header was gone by the
+            # time fetch_consoles actually ran (auth lost mid-call).
+            self.logger.warning("Xbox: console list unavailable — authorization lost; "
+                                "authorize the plugin again.")
+            return []
         if not consoles:
+            self.logger.warning("Xbox: no consoles on this Xbox account — is Remote features "
+                                "enabled?")
             return []
         self._last_consoles = consoles
         options = [(c.id, f"{c.name} ({c.console_type})") for c in consoles if c.id]
