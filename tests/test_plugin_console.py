@@ -280,6 +280,28 @@ def test_aumid_cache_second_poll_same_aumid_makes_no_installed_apps_call():
     assert dev.states["focusedTitleName"] == "Halo Infinite"
 
 
+def test_title_change_while_on_refreshes_display_text():
+    """Still On, but the focused title changed: onOffState's uiValue must follow
+    the title even though neither onOffState nor powerState changed."""
+    p = _plugin()
+    p._auth = _FakeAuth()
+    console = _console("C1", power_state="On")
+    p._api = (FakeAPI()
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "", "status": {"errorCode": "OK"}})
+             .queue_get(_list_payload(console))
+             .queue_get({"powerState": "On", "focusAppAumid": "GAME.Halo!App",
+                        "status": {"errorCode": "OK"}})
+             .queue_get(_apps_payload()))
+    dev = _console_device(23, "C1")
+    p.deviceStartComm(dev)
+    p._poll_consoles()             # On at the home menu
+    p._poll_consoles()             # same power state, game now focused
+    on_item = [i for i in dev.batches[-1] if i["key"] == "onOffState"][0]
+    assert on_item["value"] is True
+    assert on_item["uiValue"] == "Halo Infinite"
+
+
 def test_status_fetch_failure_keeps_power_update_and_leaves_focus_as_is():
     p = _plugin()
     p._auth = _FakeAuth()

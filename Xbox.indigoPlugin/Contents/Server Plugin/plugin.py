@@ -100,6 +100,7 @@ class Plugin(indigo.PluginBase):
         # Request pulls this to "now" and polls synchronously; a power action
         # pulls it a short, fixed delay forward so the state catches up.
         self._next_console_due = 0.0
+        self._console_poll_lock = threading.Lock()
         self._console_backoff_until = 0.0
         self._console_poll_failures = 0
         self._console_poll_error_logged = False
@@ -286,7 +287,14 @@ class Plugin(indigo.PluginBase):
     # -- Console polling -------------------------------------------------------
     def _poll_consoles(self):
         """One console-list call per cycle, fanned out to every configured
-        console device. Never touches presence state or self._tracked."""
+        console device. Never touches presence state or self._tracked.
+        Serialized: a Status Request polls on the UI thread and must not
+        interleave with runConcurrentThread's poll (both would diff against
+        the same pre-write states)."""
+        with self._console_poll_lock:
+            self._poll_consoles_locked()
+
+    def _poll_consoles_locked(self):
         auth, api = self._auth, self._api
         if not (auth and api and auth.is_authorized()):
             return
@@ -433,8 +441,12 @@ class Plugin(indigo.PluginBase):
         if current.get("powerState") != console.power_state:
             batch.append({"key": "lastPowerChange", "value": now_iso})
 
+        # Refresh onOffState whenever its value OR its shown text changed — the
+        # text carries the focused title while On (same rule as _sync_device).
         display_value = focus_name if (on and focus_name) else display
-        if current.get("onOffState") != on or current.get("powerState") != console.power_state:
+        if (current.get("onOffState") != on
+                or current.get("powerState") != console.power_state
+                or current.get("focusedTitleName") != focus_name):
             batch.append({"key": "onOffState", "value": on, "uiValue": display_value})
 
         if batch:
