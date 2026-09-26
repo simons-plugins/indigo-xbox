@@ -698,6 +698,8 @@ def test_fetch_consoles_generic_exception_routes_through_failure_path(caplog):
         p._poll_consoles()             # must not raise
     assert dev.error_state == "console list unavailable"
     assert p._console_backoff_until > 0
+    failed = [r for r in caplog.records if "Xbox console poll failed" in r.getMessage()]
+    assert len(failed) == 1 and failed[0].exc_info is not None   # unexpected: traceback kept
 
 
 def test_auth_refresh_generic_exception_routes_through_failure_path():
@@ -836,6 +838,7 @@ def test_console_list_failure_log_once_error_then_debug_then_recover_then_error(
              and "Xbox console poll still failing" in r.getMessage()]
     assert len(errors) == 2
     assert len(debugs) == 1
+    assert not any(r.exc_info for r in errors)   # HTTP failure: message only, no traceback
 
 
 def test_console_list_429_without_retry_after_uses_exponential_backoff():

@@ -51,6 +51,8 @@ CONSOLE_BACKOFF_BASE = 60
 CONSOLE_BACKOFF_MAX = 900
 CONSOLE_POWER_ACTION_FOLLOWUP_DELAY = 10
 MAX_SLEEP_SLICE = 5
+# XboxError.key marking a wrapped non-Xbox exception (logged with a traceback).
+UNEXPECTED_ERROR_KEY = "unexpected_exception"
 
 # Gamerscore/tier move slowly, and the profile service is a whole extra call, so
 # the self device refreshes its profile extras only every Nth poll (plus once at
@@ -336,7 +338,8 @@ class Plugin(indigo.PluginBase):
             self._handle_console_poll_failure(consoles.keys(), exc)
             return
         except Exception as exc:  # pylint: disable=broad-except
-            wrapped = XboxError(f"unexpected {type(exc).__name__}: {exc}")
+            wrapped = XboxError(f"unexpected {type(exc).__name__}: {exc}",
+                                key=UNEXPECTED_ERROR_KEY)
             self._handle_console_poll_failure(consoles.keys(), wrapped)
             return
         if console_list is None:
@@ -398,11 +401,15 @@ class Plugin(indigo.PluginBase):
             self._next_console_due = time.time() + self._console_poll_delay()
 
     def _pull_console_poll_forward(self, delay):
-        """Move the next console poll earlier (never later) — used after a
-        power command so the state catches up without polling every action."""
+        """Move the next console poll earlier — used after a power command so
+        the state catches up without polling every action. An overdue due
+        time (a poll is running or about to) is replaced too: otherwise a
+        command sent mid-poll is lost when the loop reschedules at
+        now + interval (runConcurrentThread keeps the earlier of the two)."""
         with self._dev_lock:
-            target = time.time() + delay
-            if target < self._next_console_due:
+            now = time.time()
+            target = now + delay
+            if target < self._next_console_due or self._next_console_due <= now:
                 self._next_console_due = target
 
     def _console_poll_delay(self):
@@ -460,10 +467,12 @@ class Plugin(indigo.PluginBase):
             if already:
                 self.logger.debug("Xbox console poll still failing: %s", exc)
             else:
-                # logger.exception() is safe here — called from within the
-                # active except block in _poll_consoles_locked, so it still
-                # captures the real underlying traceback.
-                self.logger.exception("Xbox console poll failed: %s", exc)
+                # A traceback only for an unexpected (non-Xbox) exception —
+                # an HTTP/transport failure is fully described by its message.
+                # Called inside the active except block, so exc_info is the
+                # real underlying exception.
+                self.logger.error("Xbox console poll failed: %s", exc,
+                                  exc_info=exc.key == UNEXPECTED_ERROR_KEY)
 
     def _sync_console_device(self, dev, console, now_iso):
         """Write only changed console states. The focused title is resolved

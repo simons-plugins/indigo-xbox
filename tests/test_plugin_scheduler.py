@@ -123,19 +123,15 @@ def test_console_backoff_delays_console_polling_only(monkeypatch):
 # -- (e) a pull-forward during a poll must not be clobbered -------------------
 
 def test_pull_forward_during_poll_is_not_overwritten(monkeypatch):
-    """``_pull_console_poll_forward`` itself only ever moves the due time
-    EARLIER than its current value, so it cannot demonstrate this race
-    directly while the loop's own due is already <= now (that's why the poll
-    fired in the first place — "now + any positive delay" can never be
-    earlier than an already-due time). We instead simulate the *effect* of
-    a concurrent pull-forward — self._next_console_due changing to an
-    earlier future value while ``_poll_consoles`` is running — to test
-    runConcurrentThread's own "keep the earlier of the two" logic directly."""
+    """A power command sent while a console poll is running (due already
+    <= now) must still pull the NEXT poll forward, not be discarded when the
+    loop reschedules at now + interval. Drives the real
+    ``_pull_console_poll_forward`` from inside the poll."""
     p = _plugin()
     clock = _fake_clock(monkeypatch)
 
     def fake_poll_consoles():
-        p._next_console_due = clock["t"] + 3   # as if pulled forward mid-poll
+        p._pull_console_poll_forward(3)        # the real power-action path
     monkeypatch.setattr(p, "_supervise", lambda: None)
     monkeypatch.setattr(p, "_poll_consoles", fake_poll_consoles)
     p._poll_interval = 9999
@@ -147,9 +143,7 @@ def test_pull_forward_during_poll_is_not_overwritten(monkeypatch):
 
     p.runConcurrentThread()
 
-    # The pulled-forward due time (now(0) + 3 = 3) must win over the
-    # normal post-poll advance (now(0) + 60 = 60).
-    assert p._next_console_due == 3.0
+    assert p._next_console_due == 3.0      # pulled-forward follow-up wins over now+60
 
 
 # -- (f) an exception from _poll_consoles never escapes, and due advances -----
