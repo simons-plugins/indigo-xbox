@@ -117,8 +117,8 @@ The [Domio](https://domio-smart-home.app) iOS app lists pages it finds in
 bundles. Copy the page there once (run **on the Indigo server Mac**):
 
 ```bash
-cp "/Library/Application Support/Perceptive Automation/Indigo 2025.2/Plugins/Xbox.indigoPlugin/Contents/Resources/static/pages/xbox-charts.html" \
-   "/Library/Application Support/Perceptive Automation/Indigo 2025.2/Web Assets/static/pages/"
+cp "/Library/Application Support/Perceptive Automation/Indigo 2026.1/Plugins/Xbox.indigoPlugin/Contents/Resources/static/pages/xbox-charts.html" \
+   "/Library/Application Support/Perceptive Automation/Indigo 2026.1/Web Assets/static/pages/"
 ```
 
 The page then appears in Domio's pages list as **"Xbox Usage"** (game-controller
